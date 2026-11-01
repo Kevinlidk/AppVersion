@@ -193,10 +193,13 @@ await test("退出登录后会话立即失效,需重新登录", async () => {
 
 /* ── 应用 CRUD(管理员)── */
 
-await test("GET /api/apps 初始返回空列表", async () => {
-  const res = await call("/api/apps");
-  assertEq(res.status, 200, "状态码");
-  assertEq(await bodyOf(res), [], "列表");
+await test("首次 GET 自动注入 Google Chrome 示例应用", async () => {
+  const list = await bodyOf(await call("/api/apps"));
+  const sample = list.find((a) => a.packageId === "googlechrome");
+  if (!sample) throw new Error("示例应用缺失");
+  assertEq(sample.channel, "chocolatey", "示例渠道");
+  assertEq(sample.name, "Google Chrome", "示例名称");
+  assertEq(sample.notify, true, "通知默认开启");
 });
 
 await test("POST 新增 GitHub 应用成功,字段归一化", async () => {
@@ -206,7 +209,7 @@ await test("POST 新增 GitHub 应用成功,字段归一化", async () => {
   assertEq(app.repo, "foo/bar", "repo 归一化");
   assertEq(app.notify, true, "notify 默认开启");
   if (!app.id) throw new Error("缺少 id");
-  assertEq((await bodyOf(await call("/api/apps"))).length, 1, "列表长度");
+  assertEq((await bodyOf(await call("/api/apps"))).length, 2, "列表长度(示例+新增)");
 });
 
 await test("POST 校验:缺名称 / 仓库格式 / winget 缺发布者 / 非法渠道 均返回 400", async () => {
@@ -340,6 +343,15 @@ await test("DELETE 删除应用成功", async () => {
   assertEq(res.status, 200, "状态码");
   const rest = await bodyOf(await call("/api/apps"));
   if (rest.some((a) => a.id === target.id)) throw new Error("未删除");
+});
+
+await test("清空全部应用后,示例不会重新注入(仅首次运行)", async () => {
+  const list = await bodyOf(await call("/api/apps"));
+  for (const a of list) {
+    const res = await call("/api/apps/" + a.id, { method: "DELETE" });
+    assertEq(res.status, 200, "删除 " + a.name);
+  }
+  assertEq(await bodyOf(await call("/api/apps")), [], "清空后保持为空");
 });
 
 await test("未知接口返回 404,响应为 JSON", async () => {

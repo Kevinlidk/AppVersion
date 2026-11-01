@@ -21,6 +21,7 @@
  */
 
 const LIST_KEY = "apps:v1";
+const SEED_KEY = "seeded:v1";
 const UA = "app-version-worker/1.1";
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CHOCO_ID_RE = /^[A-Za-z0-9_.+-]+$/;
@@ -158,6 +159,29 @@ async function readApps(env) {
 
 async function writeApps(env, list) {
   await kv(env).put(LIST_KEY, JSON.stringify(list));
+}
+
+/**
+ * 首次运行时注入示例应用(Google Chrome,Chocolatey 渠道)。
+ * 写入标记后不再注入:即使之后删光全部应用,列表也会保持为空。
+ * @returns {Array|null} 注入的新列表;未注入时返回 null
+ */
+async function seedSampleIfFirstRun(env, list) {
+  const store = kv(env);
+  if (await store.get(SEED_KEY)) return null;
+  await store.put(SEED_KEY, "1");
+  if (list.length) return null; // 已有数据,不注入
+  const app = normalizeApp({
+    name: "Google Chrome",
+    channel: "chocolatey",
+    packageId: "googlechrome",
+    version: "",
+    note: "示例应用:登录后可编辑或删除",
+  });
+  app.id = crypto.randomUUID();
+  app.createdAt = nowIso();
+  await writeApps(env, [app]);
+  return [app];
 }
 
 /* ─────────────── 字段校验与归一化 ─────────────── */
@@ -493,7 +517,15 @@ async function handleApi(request, env, pathname) {
 
   /* ── 查看类接口(公开,访客只读)── */
 
-  if (pathname === "/api/apps" && method === "GET") return json(await readApps(env));
+  if (pathname === "/api/apps" && method === "GET") {
+    const list = await readApps(env);
+    try {
+      const seeded = await seedSampleIfFirstRun(env, list);
+      return json(seeded || list);
+    } catch {
+      return json(list); // 示例注入失败不影响查看
+    }
+  }
 
   /* ── 编辑类接口(需要管理员)── */
 
