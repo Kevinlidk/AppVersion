@@ -241,6 +241,20 @@ function normalizeApp(input, base = {}) {
   return out;
 }
 
+/** 归一化导入的单条记录:校验必填字段,保留查询缓存等已知字段,缺 id 则补齐 */
+function normalizeImportedApp(rec) {
+  if (!rec || typeof rec !== "object" || Array.isArray(rec)) {
+    throw new ApiError("记录不是对象");
+  }
+  const base = {};
+  for (const k of ["latestVersion", "releaseUrl", "publishedAt", "lastCheckedAt", "notifiedVersion", "createdAt"]) {
+    if (rec[k] !== undefined) base[k] = rec[k];
+  }
+  const app = normalizeApp(rec, base);
+  app.id = typeof rec.id === "string" && /^[A-Za-z0-9-]+$/.test(rec.id) ? rec.id : crypto.randomUUID();
+  return app;
+}
+
 /* ─────────────── 渠道查询 ─────────────── */
 
 async function ghHeaders(env) {
@@ -586,6 +600,46 @@ async function handleApi(request, env, pathname) {
     app.notifiedVersion = latest.version;
     await writeApps(env, list);
     return json(app);
+  }
+
+  if (pathname === "/api/apps/export" && method === "GET") {
+    await requireAdmin(env, request);
+    const list = await readApps(env);
+    const payload = {
+      format: "app-version-backup",
+      version: 1,
+      exportedAt: nowIso(),
+      count: list.length,
+      apps: list,
+    };
+    const stamp = nowIso().replace(/[:T]/g, "-").slice(0, 19);
+    return new Response(JSON.stringify(payload, null, 2), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="app-version-backup-${stamp}.json"`,
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  if (pathname === "/api/apps/import" && method === "POST") {
+    await requireAdmin(env, request);
+    const body = await readJson(request);
+    const records = Array.isArray(body) ? body : body.apps;
+    if (!Array.isArray(records)) {
+      throw new ApiError("导入文件格式不正确:应为 {\"apps\":[…]} 或应用数组");
+    }
+    if (records.length > 500) throw new ApiError("单次导入最多 500 条记录");
+    const list = [];
+    records.forEach((rec, i) => {
+      try {
+        list.push(normalizeImportedApp(rec));
+      } catch (e) {
+        throw new ApiError(`第 ${i + 1} 条记录无效:${e.message}`, e instanceof ApiError ? e.status : 400);
+      }
+    });
+    await writeApps(env, list);
+    return json({ ok: true, imported: list.length });
   }
 
   throw new ApiError("接口不存在", 404);

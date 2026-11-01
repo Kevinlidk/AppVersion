@@ -354,6 +354,46 @@ await test("清空全部应用后,示例不会重新注入(仅首次运行)", as
   assertEq(await bodyOf(await call("/api/apps")), [], "清空后保持为空");
 });
 
+/* ── 配置导出 / 导入 ── */
+
+await test("GET /api/apps/export:未登录 401,管理员导出为附件 JSON", async () => {
+  const anon = await worker.fetch(new Request("http://localhost/api/apps/export"), env, ctx);
+  assertEq(anon.status, 401, "未登录状态码");
+  const res = await call("/api/apps/export");
+  assertEq(res.status, 200, "状态码");
+  if (!/attachment/.test(res.headers.get("content-disposition") || "")) throw new Error("应为附件下载");
+  const data = await bodyOf(res);
+  assertEq(data.format, "app-version-backup", "格式标识");
+  if (!Array.isArray(data.apps)) throw new Error("缺少 apps 数组");
+  assertEq(data.apps.length, 0, "当前为空列表");
+});
+
+await test("POST /api/apps/import:未登录 401;格式错误与坏记录返回 400 并带序号", async () => {
+  const anon = await worker.fetch(new Request("http://localhost/api/apps/import", post({ apps: [] })), env, ctx);
+  assertEq(anon.status, 401, "未登录状态码");
+  assertEq((await call("/api/apps/import", post({ foo: 1 }))).status, 400, "缺 apps 数组");
+  const bad = await call("/api/apps/import", post({ apps: [{ channel: "manual" }] }));
+  assertEq(bad.status, 400, "缺名称记录");
+  if (!/第 1 条/.test((await bodyOf(bad)).error)) throw new Error("缺少序号提示");
+});
+
+await test("POST /api/apps/import:导入覆盖列表,保留合法 id 并归一化", async () => {
+  const rec = { id: "custom-id-123", name: "导入应用", channel: "github", repo: "https://github.com/foo/bar/", version: "v1.0.0" };
+  const res = await call("/api/apps/import", post({ apps: [rec] }));
+  assertEq(res.status, 200, "状态码");
+  assertEq((await bodyOf(res)).imported, 1, "导入数量");
+  const list = await bodyOf(await call("/api/apps"));
+  assertEq(list.length, 1, "覆盖后长度");
+  assertEq(list[0].id, "custom-id-123", "id 保留");
+  assertEq(list[0].repo, "foo/bar", "repo 归一化");
+});
+
+await test("POST /api/apps/import:也接受裸数组", async () => {
+  const res = await call("/api/apps/import", post([{ name: "裸数组应用", channel: "manual", version: "1.0" }]));
+  assertEq(res.status, 200, "状态码");
+  assertEq((await bodyOf(await call("/api/apps"))).length, 1, "覆盖后长度");
+});
+
 await test("未知接口返回 404,响应为 JSON", async () => {
   const res = await call("/api/unknown");
   assertEq(res.status, 404, "状态码");
