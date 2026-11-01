@@ -17,6 +17,7 @@
 - 🔐 **管理员登录** —— 右上角登录后才能添加/编辑/删除/刷新监控应用;访客默认只读,仅可查看页面信息
 - ✅ **批量刷新** —— 一键刷新全部自动渠道应用,逐一显示进度
 - ✅ **搜索筛选** —— 按名称 / 仓库 / 包 ID / 备注搜索,按渠道筛选
+- 🎨 **动态背景** —— GlyphWind WebGL2 字形流背景(`public/background/` 套件),墨色跟随深浅色主题,不拦截任何点击;支持 `?seed=123&look=mixed|lettered|figured` 切换图案,系统开启「减少动态效果」时自动退化为静态画面
 - 📱 **移动端优先** —— 响应式布局(适配 360px~430px 常见手机屏宽)、大号点击区域、刘海屏安全区适配、深色模式自动跟随系统
 
 > 💡 **关于 UniGetUI**:它本身只提供本机 IPC/CLI 接口,没有公开的 Web 版本查询 API;本项目的 Chocolatey / winget 渠道直接对接它背后聚合的官方数据源,效果等同且可在云端运行。
@@ -28,6 +29,7 @@
 ```
 ├── src/worker.js        # Worker:REST API、多渠道版本查询、定时检查与通知推送
 ├── public/index.html    # 前端单页(Workers Static Assets 承载)
+├── public/background/   # GlyphWind 动态背景套件(WebGL2,装饰性)
 ├── wrangler.toml        # Cloudflare Workers 配置(assets / KV / cron)
 ├── package.json
 └── test/

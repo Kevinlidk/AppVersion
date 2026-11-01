@@ -7,6 +7,8 @@
 <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
 <title>应用版本检测</title>
+<!-- 动态背景引擎样式(先引入,便于页面样式覆盖墨色) -->
+<link rel="stylesheet" href="background/engine.css">
 <style>
   :root {
     --bg: #f4f6fb;
@@ -41,10 +43,13 @@
     }
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
+  /* 页面底色放在 html 上、body 保持透明:让背景画布(#bg-stage, z-index:-2)可见 */
+  html { -webkit-text-size-adjust: 100%; background: var(--bg); }
+  /* 背景墨色跟随主题变量(engine.css 的默认灰会被这里覆盖) */
+  #bg-stage { color: var(--muted); }
   body {
     margin: 0;
-    background: var(--bg);
+    background: transparent;
     color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
     -webkit-tap-highlight-color: transparent;
@@ -198,6 +203,8 @@
 </style>
 </head>
 <body>
+
+<div id="bg-stage" aria-hidden="true"></div>
 
 <header class="topbar">
   <div class="container topbar-inner">
@@ -683,6 +690,44 @@ $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
   await initSession();
   renderAdminUi();
   await load();
+})();
+</script>
+<!-- 动态背景:GlyphWind WebGL2 引擎(先加载引擎,再初始化) -->
+<script src="background/renderer.js"></script>
+<script>
+(function () {
+  if (typeof GlyphWind === "undefined") return; // 引擎缺失时保持纯底色
+  var stage = document.getElementById("bg-stage");
+  if (!stage) return;
+
+  // URL 可选参数:?seed=123&look=mixed|lettered|figured
+  var params = new URLSearchParams(location.search);
+  var looks = { mixed: 1, lettered: 1, figured: 1 };
+  var look = looks[params.get("look")] ? params.get("look") : "mixed";
+  var seedRaw = Number(params.get("seed"));
+  var seed = Number.isFinite(seedRaw) ? seedRaw : 0x19a4c637;
+
+  var settings = Object.assign(GlyphWind.defaults(), {
+    seed: seed,
+    look: look,
+    interactive: false // 装饰性:不绑定指针/键盘监听,不拦截任何点击
+  });
+
+  var instance = GlyphWind.create({
+    element: stage,
+    settings: function () { return settings; },
+    timing: function () { return { fadeIn: 3000, fadeOut: 500 }; },
+    onReady: function () {
+      // 尊重系统"减少动态效果"偏好:偏好时不启动动画,仅保留静态画面
+      var reduce = window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduce) instance.setRunning(true);
+    },
+    onError: function (err) {
+      console.error("背景引擎错误:", err);
+      stage.style.display = "none"; // 优雅回退到纯底色
+    }
+  });
 })();
 </script>
 </body>

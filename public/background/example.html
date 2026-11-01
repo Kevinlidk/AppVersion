@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Background Kit · 接入示例</title>
+
+  <!-- 1) 引入引擎样式（必须） -->
+  <link href="engine.css" rel="stylesheet">
+
+  <!-- ↓↓↓ 以下仅为本示例页面自己的内容样式；接入你自己的项目时换成你的 CSS ↓↓↓ -->
+  <style>
+    html, body { margin: 0; height: 100%; }
+    body { background: #333; color: #e7e7e7; font-family: system-ui, Arial, sans-serif; }
+    /* 关键：内容层要在背景画布之上 */
+    .content { position: relative; z-index: 1; min-height: 100vh;
+               display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { max-width: 560px; background: rgba(231,231,231,.92); color: #333;
+            border-radius: 24px; padding: 32px 36px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    p { line-height: 1.7; color: #444; }
+    code { background: #ddd; padding: 1px 6px; border-radius: 4px; }
+  </style>
+  <!-- ↑↑↑ 以上内容样式仅作演示，可删除 ↑↑↑ -->
+</head>
+<body>
+  <!-- 2) 背景挂载点：放在 body 起始处；aria-hidden + pointer-events:none 已在 engine.css 中 -->
+  <div id="bg-stage" aria-hidden="true"></div>
+
+  <!-- 3) 你的页面内容（示例） -->
+  <main class="content">
+    <section class="card">
+      <h1>Claude Code 动态背景</h1>
+      <p>这是一个把背景套件接入普通页面的最小示例。背景画布位于内容之下、且不拦截点击。
+         在地址栏追加 <code>?look=lettered</code> 或 <code>?seed=42</code> 可切换图案。</p>
+      <p>接入你自己的项目：复制整个 <code>background/</code> 目录，在页面中放一个
+         <code>#bg-stage</code> 容器，再按下方脚本初始化即可。</p>
+    </section>
+  </main>
+
+  <!-- 4) 加载引擎（必须：先 renderer，后初始化脚本） -->
+  <script src="renderer.js"></script>
+  <script>
+    // ===== 手动初始化（可控版，可直接拷进你的项目）=====
+    (function () {
+      if (typeof GlyphWind === 'undefined') { console.error('GlyphWind 未加载'); return; }
+      var stage = document.getElementById('bg-stage');
+      if (!stage) { console.error('#bg-stage 缺失'); return; }
+
+      // 从 URL 读取可选参数：?seed=123&look=mixed|lettered|figured
+      var params = new URLSearchParams(location.search);
+      var looks = { mixed: 1, lettered: 1, figured: 1 };
+      var look = looks[params.get('look')] ? params.get('look') : 'mixed';
+      var seedRaw = Number(params.get('seed'));
+      var seed = Number.isFinite(seedRaw) ? seedRaw : 0x19a4c637;
+
+      var settings = Object.assign(GlyphWind.defaults(), {
+        seed: seed,
+        look: look,
+        interactive: false   // 装饰性：不绑定指针 / 键盘监听
+      });
+
+      var instance = GlyphWind.create({
+        element: stage,
+        settings: function () { return settings; },
+        timing:  function () { return { fadeIn: 3000, fadeOut: 500 }; },
+        onReady: function () {
+          // 尊重系统"减少动态效果"偏好；否则启动动画
+          var reduce = window.matchMedia &&
+                       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (!reduce) instance.setRunning(true);
+        },
+        onError: function (err) {
+          console.error('背景引擎错误:', err);
+          stage.style.display = 'none'; // 优雅回退到纯底色
+        }
+      });
+    })();
+
+    // 想用零代码方式？删掉上面这段 IIFE，改为：
+    //   <script src="loader.js"></script>
+    // loader.js 默认 interactive:false，并同样支持 ?seed= / ?look= 参数。
+  </script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+/* Engine styles extracted from claude-code-background (src/styles.css).
+ * Trimmed to only what the decorative background needs: canvas positioning
+ * and the #bg-stage container. Control-panel styles are intentionally omitted
+ * because this is a decorative, UI-free background. */
+
+.absolute { position: absolute; }
+.block { display: block; }
+
+/* Full-viewport background layer, painted behind page content.
+ * pointer-events:none => never intercepts clicks on the password-reset UI.
+ * The engine reads the computed `color` (glyph ink) and `font-family`
+ * (glyph font) from this element. */
+#bg-stage {
+  position: fixed;
+  inset: 0;
+  isolation: isolate;
+  z-index: -2;                 /* behind content; body::after sits at -1 */
+  pointer-events: none;        /* decorative only */
+  overflow: hidden;
+  color: #8a93a0;              /* glyph ink color (engine reads computed color) */
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
