@@ -3,7 +3,7 @@
  *   npm test   或   node test/smoke.mjs
  *
  * 通过 mock 全局 fetch(GitHub / Chocolatey / 通知 webhook)与 KV,
- * 对 Worker 的 API 逻辑、定时检查与通知推送做验证。
+ * 对 Worker 的 API 逻辑、鉴权、定时检查与通知推送做验证。
  */
 import worker from "../src/worker.js";
 
@@ -73,12 +73,34 @@ function makeKV() {
   return {
     async get(k) { return store.has(k) ? store.get(k) : null; },
     async put(k, v) { store.set(k, String(v)); },
+    async delete(k) { store.delete(k); },
   };
 }
 
-const env = { APP_KV: makeKV(), CHECK_GAP_MS: "1" };
+const ADMIN_PASSWORD = "test-pass-123";
+const env = { APP_KV: makeKV(), ADMIN_PASSWORD, CHECK_GAP_MS: "1" };
 const ctx = { waitUntil() {}, passThroughOnException() {} };
-const call = (path, opts) => worker.fetch(new Request("http://localhost" + path, opts), env, ctx);
+
+/* 登录态 Cookie 注入 */
+let adminCookie = "";
+const call = (path, opts = {}) => {
+  const headers = { ...(opts.headers || {}) };
+  if (adminCookie) headers.cookie = "av_session=" + adminCookie;
+  return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), env, ctx);
+};
+async function loginAs(envX, password) {
+  const res = await worker.fetch(
+    new Request("http://localhost/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    }),
+    envX,
+    ctx
+  );
+  const setc = res.headers.get("set-cookie") || "";
+  return { res, cookie: (setc.match(/av_session=([^;]+)/) || [])[1] || "" };
+}
 const bodyOf = async (res) => {
   const t = await res.text();
   try { return JSON.parse(t); } catch { return t; }
@@ -111,6 +133,65 @@ function assertEq(actual, expected, msg) {
 }
 
 console.log("API 冒烟测试\n");
+
+/* ── 鉴权 ── */
+
+await test("未配置 ADMIN_PASSWORD 时,编辑接口一律拒绝并提示配置", async () => {
+  const envX = { APP_KV: makeKV() };
+  const res = await worker.fetch(new Request("http://localhost/api/apps", post({ name: "X" })), envX, ctx);
+  assertEq(res.status, 500, "状态码");
+  const b = await bodyOf(res);
+  if (!/ADMIN_PASSWORD/.test(b.error)) throw new Error("提示缺少 ADMIN_PASSWORD: " + b.error);
+});
+
+await test("配置密码但未登录:编辑类接口 401,查看接口公开", async () => {
+  assertEq((await call("/api/apps", post({ name: "X" }))).status, 401, "POST");
+  assertEq((await call("/api/apps/abc", put({ name: "X" }))).status, 401, "PUT");
+  assertEq((await call("/api/apps/abc", { method: "DELETE" })).status, 401, "DELETE");
+  assertEq((await call("/api/apps/abc/refresh", { method: "POST" })).status, 401, "refresh");
+  assertEq((await call("/api/apps")).status, 200, "GET 列表公开");
+});
+
+await test("GET /api/session 返回配置与登录状态", async () => {
+  const s = await bodyOf(await call("/api/session"));
+  assertEq(s, { admin: false, configured: true }, "会话状态");
+});
+
+await test("登录:错误密码 401;正确密码种下会话 Cookie", async () => {
+  const bad = await call("/api/login", post({ password: "wrong" }));
+  assertEq(bad.status, 401, "错误密码状态码");
+  if (!/密码错误/.test((await bodyOf(bad)).error)) throw new Error("提示文案不符");
+  const { res, cookie } = await loginAs(env, ADMIN_PASSWORD);
+  assertEq(res.status, 200, "登录状态码");
+  if (!cookie) throw new Error("未种下会话 Cookie");
+  adminCookie = cookie;
+  const s = await bodyOf(await call("/api/session"));
+  assertEq(s.admin, true, "登录态");
+});
+
+await test("登录限流:同一 IP 连续失败 10 次后 429 锁定", async () => {
+  const env3 = { APP_KV: makeKV(), ADMIN_PASSWORD: "p" };
+  let last;
+  for (let i = 0; i < 11; i++) {
+    last = await worker.fetch(
+      new Request("http://localhost/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "nope" }) }),
+      env3, ctx
+    );
+  }
+  assertEq(last.status, 429, "第 11 次应被锁定");
+});
+
+await test("退出登录后会话立即失效,需重新登录", async () => {
+  const lo = await call("/api/logout", { method: "POST" });
+  assertEq(lo.status, 200, "退出状态码");
+  const res = await call("/api/apps", post({ name: "X" }));
+  assertEq(res.status, 401, "旧会话应失效");
+  const { cookie } = await loginAs(env, ADMIN_PASSWORD);
+  if (!cookie) throw new Error("重新登录失败");
+  adminCookie = cookie;
+});
+
+/* ── 应用 CRUD(管理员)── */
 
 await test("GET /api/apps 初始返回空列表", async () => {
   const res = await call("/api/apps");
@@ -277,24 +358,30 @@ await test("未绑定 KV 时返回 500 并提示 APP_KV", async () => {
 });
 
 await test("非 /api 路径回退到 ASSETS 绑定", async () => {
-  const env2 = { APP_KV: makeKV(), ASSETS: { fetch: async () => new Response("STATIC_OK") } };
+  const env2 = { APP_KV: makeKV(), ADMIN_PASSWORD, ASSETS: { fetch: async () => new Response("STATIC_OK") } };
   const res = await worker.fetch(new Request("http://localhost/"), env2, ctx);
   assertEq(await bodyOf(res), "STATIC_OK", "静态回退");
 });
 
-/* ── 定时检查 + 通知推送 ── */
+/* ── 定时检查 + 通知推送(服务端内部,不受登录态限制)── */
 
 await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,notify:false 跳过", async () => {
-  const env2 = { APP_KV: makeKV(), CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook" };
+  const env2 = { APP_KV: makeKV(), CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook", ADMIN_PASSWORD: "p2" };
   hookCalls.length = 0;
+  const { cookie: ck2 } = await loginAs(env2, "p2");
+  const call2 = (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}) };
+    headers.cookie = "av_session=" + ck2;
+    return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), env2, ctx);
+  };
   // A:GitHub 渠道,当前 v1.0.0 → 应推送
-  const a = await bodyOf(await call2(env2, "/api/apps", post({ name: "应用A", channel: "github", repo: "foo/bar", version: "v1.0.0" })));
-  // B:GitHub 渠道,关闭通知 → 检查但不应推送
-  await call2(env2, "/api/apps", post({ name: "应用B", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: false }));
+  const a = await bodyOf(await call2("/api/apps", post({ name: "应用A", channel: "github", repo: "foo/bar", version: "v1.0.0" })));
+  // B:GitHub 渠道,关闭通知 → 不应推送
+  await call2("/api/apps", post({ name: "应用B", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: false }));
   // C:GitHub 渠道,当前版本已是最新 → 不推送但更新检查时间
-  await call2(env2, "/api/apps", post({ name: "应用C", channel: "github", repo: "foo/bar", version: "v2.0.0" }));
+  await call2("/api/apps", post({ name: "应用C", channel: "github", repo: "foo/bar", version: "v2.0.0" }));
   // D:手动渠道 → 完全跳过
-  await call2(env2, "/api/apps", post({ name: "应用D", channel: "manual", version: "1.0.0" }));
+  await call2("/api/apps", post({ name: "应用D", channel: "manual", version: "1.0.0" }));
 
   await runScheduled(env2);
   assertEq(hookCalls.length, 1, "推送次数");
@@ -303,7 +390,7 @@ await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,noti
   assertEq(payload.apps[0].name, "应用A", "推送对象");
   assertEq(payload.apps[0].latestVersion, "v2.0.0", "推送版本");
 
-  const list = await bodyOf(await call2(env2, "/api/apps"));
+  const list = await bodyOf(await call2("/api/apps"));
   const a2 = list.find((x) => x.id === a.id);
   assertEq(a2.notifiedVersion, "v2.0.0", "A 记录 notifiedVersion");
   const c2 = list.find((x) => x.name === "应用C");
@@ -319,7 +406,7 @@ await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,noti
 });
 
 await test("scheduled:全部渠道发送失败时回滚标记,下次重试", async () => {
-  const env3 = { APP_KV: makeKV(), CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook" };
+  const env3 = { APP_KV: makeKV(), CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook", ADMIN_PASSWORD: "p3" };
   hookCalls.length = 0;
   // 临时让 webhook 返回 500
   const realMock = globalThis.fetch;
@@ -329,30 +416,32 @@ await test("scheduled:全部渠道发送失败时回滚标记,下次重试", asy
     return realMock(input, init);
   };
   try {
-    await call2(env3, "/api/apps", post({ name: "应用E", channel: "github", repo: "foo/bar", version: "v1.0.0" }));
+    const { cookie: ck3 } = await loginAs(env3, "p3");
+    const call3 = (path, opts = {}) => {
+      const headers = { ...(opts.headers || {}) };
+      headers.cookie = "av_session=" + ck3;
+      return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), env3, ctx);
+    };
+    await call3("/api/apps", post({ name: "应用E", channel: "github", repo: "foo/bar", version: "v1.0.0" }));
     await runScheduled(env3);
-    assertEq(hookCalls.length, 0, "mock 拦截被替换,不应记录");
-    const list = await bodyOf(await call2(env3, "/api/apps"));
+    assertEq(hookCalls.length, 0, "发送失败不应记录调用");
+    const list = await bodyOf(await call3("/api/apps"));
     if (list[0].notifiedVersion !== undefined) throw new Error("发送失败不应记录 notifiedVersion");
     // 恢复后重试成功
     globalThis.fetch = realMock;
     await runScheduled(env3);
     assertEq(hookCalls.length, 1, "重试后推送");
-    const list2 = await bodyOf(await call2(env3, "/api/apps"));
+    const list2 = await bodyOf(await call3("/api/apps"));
     assertEq(list2[0].notifiedVersion, "v2.0.0", "重试成功记录 notifiedVersion");
   } finally {
     globalThis.fetch = realMock;
   }
 });
 
-function call2(env2, path, opts) {
-  return worker.fetch(new Request("http://localhost" + path, opts), env2, ctx);
-}
-
-async function runScheduled(env2) {
+async function runScheduled(envX) {
   const waiters = [];
   const schedCtx = { waitUntil: (f) => waiters.push(f), passThroughOnException() {} };
-  await worker.scheduled({}, env2, schedCtx);
+  await worker.scheduled({}, envX, schedCtx);
   await Promise.all(waiters);
 }
 

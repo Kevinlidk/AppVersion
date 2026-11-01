@@ -6,8 +6,11 @@
  *  - 自动渠道:GitHub Releases、Chocolatey 社区源、winget 官方清单仓库
  *  - 定时检查(Cron Trigger):发现新版本时通过飞书/Telegram/Bark/Server酱/
  *    通用 webhook 推送通知(按环境变量配置,可多选,未配置则仅页面展示)
+ *  - 管理员鉴权:编辑类接口(增删改/刷新)需要登录;访客只读
  *
  * 存储:Cloudflare KV,绑定变量名 APP_KV(应用列表序列化为单个 JSON 文档)。
+ * 必配环境变量:
+ *  - ADMIN_PASSWORD       管理员密码(编辑监控应用须登录;未配置时编辑接口一律拒绝)
  * 可选环境变量:
  *  - GITHUB_TOKEN         提升 GitHub API 速率限制(GitHub 渠道与 winget 渠道共用)
  *  - FEISHU_WEBHOOK_URL   飞书群自定义机器人 webhook
@@ -22,6 +25,10 @@ const UA = "app-version-worker/1.1";
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CHOCO_ID_RE = /^[A-Za-z0-9_.+-]+$/;
 const WINGET_ID_RE = /^[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+$/;
+const SESSION_COOKIE = "av_session";
+const SESSION_TTL = 604800; // 会话有效期:7 天
+const LOGIN_MAX_FAILS = 10; // 登录失败锁定阈值
+const LOGIN_LOCK_TTL = 900; // 锁定时长:15 分钟
 
 /** 业务类错误,携带 HTTP 状态码 */
 class ApiError extends Error {
@@ -31,10 +38,10 @@ class ApiError extends Error {
   }
 }
 
-function json(data, status = 200) {
+function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers },
   });
 }
 
@@ -81,6 +88,49 @@ function compareVersions(a, b) {
     return String(x) < String(y) ? -1 : 1;
   }
   return 0;
+}
+
+/* ─────────────── 管理员鉴权 ─────────────── */
+
+function getCookie(request, name) {
+  const header = request.headers.get("cookie") || "";
+  for (const part of header.split(/;\s*/)) {
+    const eq = part.indexOf("=");
+    if (eq > -1 && part.slice(0, eq) === name) return part.slice(eq + 1);
+  }
+  return "";
+}
+
+async function sha256Hex(s) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(s)));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** 恒定时间比较(先哈希再逐字节异或),避免计时侧信道 */
+async function safeEqual(a, b) {
+  const ha = await sha256Hex(a);
+  const hb = await sha256Hex(b);
+  let diff = 0;
+  for (let i = 0; i < ha.length; i++) diff |= ha.charCodeAt(i) ^ hb.charCodeAt(i);
+  return diff === 0;
+}
+
+async function isAdminRequest(env, request) {
+  if (!env || !env.ADMIN_PASSWORD) return false;
+  const token = getCookie(request, SESSION_COOKIE);
+  if (!token) return false;
+  return Boolean(await kv(env).get("session:" + token));
+}
+
+/** 编辑类接口守卫:未配置密码或未登录一律拒绝 */
+async function requireAdmin(env, request) {
+  if (!env || !env.ADMIN_PASSWORD) {
+    throw new ApiError("未配置管理员密码:请设置环境变量/Secret ADMIN_PASSWORD(步骤见 README),当前为只读模式", 500);
+  }
+  const token = getCookie(request, SESSION_COOKIE);
+  if (!token || !(await kv(env).get("session:" + token))) {
+    throw new ApiError("需要管理员登录", 401);
+  }
 }
 
 /* ─────────────── KV 存取 ─────────────── */
@@ -393,7 +443,7 @@ export default {
     }
   },
 
-  /** Cron Trigger 入口:定时检查更新并推送通知 */
+  /** Cron Trigger 入口:定时检查更新并推送通知(服务端内部,不受登录态限制) */
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(runUpdateCheck(env));
   },
@@ -402,23 +452,66 @@ export default {
 async function handleApi(request, env, pathname) {
   const method = request.method;
 
-  if (pathname === "/api/apps") {
-    if (method === "GET") return json(await readApps(env));
+  /* ── 鉴权(公开接口)── */
 
-    if (method === "POST") {
-      const body = await readJson(request);
-      const app = normalizeApp(body);
-      app.id = crypto.randomUUID();
-      app.createdAt = nowIso();
-      const list = await readApps(env);
-      list.unshift(app);
-      await writeApps(env, list);
-      return json(app, 201);
+  if (pathname === "/api/session" && method === "GET") {
+    return json({
+      admin: await isAdminRequest(env, request),
+      configured: Boolean(env && env.ADMIN_PASSWORD),
+    });
+  }
+
+  if (pathname === "/api/login" && method === "POST") {
+    if (!env || !env.ADMIN_PASSWORD) {
+      throw new ApiError("未配置管理员密码:请设置环境变量/Secret ADMIN_PASSWORD(步骤见 README)", 500);
     }
+    const body = await readJson(request);
+    const ip = request.headers.get("cf-connecting-ip") || "unknown";
+    const failKey = "loginfail:" + ip;
+    const fails = Number((await kv(env).get(failKey)) || 0);
+    if (fails >= LOGIN_MAX_FAILS) {
+      throw new ApiError("登录失败次数过多,请 15 分钟后再试", 429);
+    }
+    if (!(await safeEqual(String(body.password ?? ""), env.ADMIN_PASSWORD))) {
+      await kv(env).put(failKey, String(fails + 1), { expirationTtl: LOGIN_LOCK_TTL });
+      throw new ApiError("密码错误", 401);
+    }
+    const token = crypto.randomUUID() + "-" + crypto.randomUUID().slice(0, 8);
+    await kv(env).put("session:" + token, "1", { expirationTtl: SESSION_TTL });
+    return json({ ok: true }, 200, {
+      "set-cookie": `${SESSION_COOKIE}=${token}; HttpOnly; Secure; Path=/; Max-Age=${SESSION_TTL}; SameSite=Strict`,
+    });
+  }
+
+  if (pathname === "/api/logout" && method === "POST") {
+    const token = getCookie(request, SESSION_COOKIE);
+    if (token && env && env.APP_KV) await env.APP_KV.delete("session:" + token);
+    return json({ ok: true }, 200, {
+      "set-cookie": `${SESSION_COOKIE}=; HttpOnly; Secure; Path=/; Max-Age=0; SameSite=Strict`,
+    });
+  }
+
+  /* ── 查看类接口(公开,访客只读)── */
+
+  if (pathname === "/api/apps" && method === "GET") return json(await readApps(env));
+
+  /* ── 编辑类接口(需要管理员)── */
+
+  if (pathname === "/api/apps" && method === "POST") {
+    await requireAdmin(env, request);
+    const body = await readJson(request);
+    const app = normalizeApp(body);
+    app.id = crypto.randomUUID();
+    app.createdAt = nowIso();
+    const list = await readApps(env);
+    list.unshift(app);
+    await writeApps(env, list);
+    return json(app, 201);
   }
 
   let m = pathname.match(/^\/api\/apps\/([A-Za-z0-9-]+)$/);
-  if (m) {
+  if (m && (method === "PUT" || method === "DELETE")) {
+    await requireAdmin(env, request);
     const list = await readApps(env);
     const idx = list.findIndex((a) => a.id === m[1]);
     if (idx === -1) throw new ApiError("应用不存在", 404);
@@ -444,15 +537,14 @@ async function handleApi(request, env, pathname) {
       return json(updated);
     }
 
-    if (method === "DELETE") {
-      list.splice(idx, 1);
-      await writeApps(env, list);
-      return json({ ok: true });
-    }
+    list.splice(idx, 1);
+    await writeApps(env, list);
+    return json({ ok: true });
   }
 
   m = pathname.match(/^\/api\/apps\/([A-Za-z0-9-]+)\/refresh$/);
   if (m && method === "POST") {
+    await requireAdmin(env, request);
     const list = await readApps(env);
     const app = list.find((a) => a.id === m[1]);
     if (!app) throw new ApiError("应用不存在", 404);

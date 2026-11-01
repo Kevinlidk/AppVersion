@@ -62,8 +62,18 @@
     -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
   }
-  .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 56px; }
+  .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 8px 0; }
   h1 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .admin-chip {
+    font-size: 12.5px; font-weight: 600; white-space: nowrap;
+    color: var(--ok); background: var(--ok-bg);
+    padding: 5px 11px; border-radius: 999px;
+  }
+  @media (max-width: 430px) {
+    h1 { font-size: 15px; }
+    .btn { padding: 0 11px; font-size: 13.5px; }
+  }
 
   /* ── 按钮 ── */
   .btn {
@@ -192,7 +202,12 @@
 <header class="topbar">
   <div class="container topbar-inner">
     <h1><span aria-hidden="true">📦</span>应用版本检测</h1>
-    <button id="refreshAllBtn" class="btn ghost">⟳ 全部刷新</button>
+    <div class="top-actions">
+      <button id="refreshAllBtn" class="btn ghost hidden">⟳ 全部刷新</button>
+      <span id="adminBadge" class="admin-chip hidden">管理员</span>
+      <button id="logoutBtn" class="btn ghost hidden">退出</button>
+      <button id="loginBtn" class="btn ghost">登录</button>
+    </div>
   </div>
 </header>
 
@@ -218,7 +233,7 @@
   </div>
 </main>
 
-<button id="addBtn" class="fab" aria-label="添加应用">＋</button>
+<button id="addBtn" class="fab hidden" aria-label="添加应用">＋</button>
 
 <dialog id="appDialog">
   <form id="appForm" novalidate>
@@ -255,6 +270,20 @@
   </form>
 </dialog>
 
+<dialog id="loginDialog">
+  <form id="loginForm" novalidate>
+    <h2>管理员登录</h2>
+    <p class="hint">密码来自环境变量 ADMIN_PASSWORD;登录后可编辑监控应用,访客仅可查看。</p>
+    <label>密码
+      <input type="password" name="password" id="passwordInput" maxlength="100" placeholder="管理员密码" autocomplete="current-password">
+    </label>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="loginCancelBtn">取消</button>
+      <button type="submit" class="btn primary" id="loginSubmitBtn">登录</button>
+    </div>
+  </form>
+</dialog>
+
 <footer class="footer">
   AppVersion · 运行于 Cloudflare Workers ·
   <a href="https://github.com/Kevinlidk/AppVersion" target="_blank" rel="noopener">GitHub 仓库</a>
@@ -269,6 +298,8 @@ const listEl = $("#list");
 let apps = [];
 let filter = { q: "", channel: "all" };
 let editingId = null;
+let isAdmin = false;
+let authConfigured = false;
 
 const normV = (v) => String(v || "").trim().replace(/^v/i, "");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -284,7 +315,11 @@ async function api(path, opts = {}) {
   const res = await fetch(path, init);
   let data = {};
   try { data = await res.json(); } catch { /* 非JSON响应 */ }
-  if (!res.ok) throw new Error(data.error || "请求失败(HTTP " + res.status + ")");
+  if (!res.ok) {
+    // 会话过期时自动退回访客视图
+    if (res.status === 401 && isAdmin) { isAdmin = false; renderAdminUi(); }
+    throw new Error(data.error || "请求失败(HTTP " + res.status + ")");
+  }
   return data;
 }
 
@@ -307,6 +342,28 @@ function fmtTime(iso) {
     : { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" };
   return d.toLocaleString("zh-CN", opts);
 }
+
+/* ── 登录态 ── */
+
+async function initSession() {
+  try {
+    const s = await api("/api/session");
+    isAdmin = Boolean(s.admin);
+    authConfigured = Boolean(s.configured);
+  } catch { /* 网络异常时按访客处理 */ }
+}
+
+function renderAdminUi() {
+  $("#refreshAllBtn").classList.toggle("hidden", !isAdmin);
+  $("#loginBtn").classList.toggle("hidden", isAdmin || !authConfigured);
+  $("#adminBadge").classList.toggle("hidden", !isAdmin);
+  $("#logoutBtn").classList.toggle("hidden", !isAdmin);
+  $("#addBtn").classList.toggle("hidden", !isAdmin);
+  $("#emptyAddBtn").classList.toggle("hidden", !isAdmin);
+  render();
+}
+
+/* ── 列表渲染 ── */
 
 /* none=尚未查询 fresh=已获取最新但未记录当前版本 ok=已是最新 update=有新版本 */
 function statusOf(a) {
@@ -347,6 +404,13 @@ function cardHtml(a) {
   if (src.url) meta.push('<a href="' + esc(src.url) + '" target="_blank" rel="noopener">' + esc(src.label) + "</a>");
   else meta.push(esc(src.label));
   if (a.lastCheckedAt) meta.push("检查于 " + esc(fmtTime(a.lastCheckedAt)));
+  const actions = isAdmin ? `
+      <div class="card-actions">
+        ${!manual ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
+        ${st === "update" ? '<button class="btn act-marked">已更新</button>' : ""}
+        <button class="btn act-edit">编辑</button>
+        <button class="btn danger-text act-del">删除</button>
+      </div>` : "";
   return `
     <article class="card" data-id="${a.id}">
       <div class="card-top"><h3 class="app-name">${esc(a.name)}</h3>${badgeOf(a)}</div>
@@ -356,12 +420,7 @@ function cardHtml(a) {
       </div>
       <div class="meta">${meta.join('<span aria-hidden="true">·</span>')}</div>
       ${a.note ? `<p class="note">${esc(a.note)}</p>` : ""}
-      <div class="card-actions">
-        ${!manual ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
-        ${st === "update" ? '<button class="btn act-marked">已更新</button>' : ""}
-        <button class="btn act-edit">编辑</button>
-        <button class="btn danger-text act-del">删除</button>
-      </div>
+      ${actions}
     </article>`;
 }
 
@@ -554,6 +613,44 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+/* ── 管理员登录 / 退出 ── */
+
+const loginDlg = $("#loginDialog");
+const loginForm = $("#loginForm");
+
+$("#loginBtn").addEventListener("click", () => {
+  $("#passwordInput").value = "";
+  loginDlg.showModal();
+});
+$("#loginCancelBtn").addEventListener("click", () => loginDlg.close());
+loginDlg.addEventListener("click", (e) => { if (e.target === loginDlg) loginDlg.close(); });
+
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pwd = $("#passwordInput").value;
+  if (!pwd) { toast("请输入密码", "error"); return; }
+  const btn = $("#loginSubmitBtn");
+  btn.disabled = true;
+  try {
+    await api("/api/login", { method: "POST", body: { password: pwd } });
+    isAdmin = true;
+    loginDlg.close();
+    renderAdminUi();
+    toast("已登录,现在可以编辑监控应用");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#logoutBtn").addEventListener("click", async () => {
+  try { await api("/api/logout", { method: "POST" }); } catch { /* 忽略 */ }
+  isAdmin = false;
+  renderAdminUi();
+  toast("已退出,当前为只读视图");
+});
+
 /* ── 事件绑定 ── */
 
 listEl.addEventListener("click", (e) => {
@@ -582,7 +679,11 @@ $("#refreshAllBtn").addEventListener("click", refreshAll);
 $("#addBtn").addEventListener("click", () => openDialog(null));
 $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
 
-load();
+(async () => {
+  await initSession();
+  renderAdminUi();
+  await load();
+})();
 </script>
 </body>
 </html>

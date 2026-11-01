@@ -14,6 +14,7 @@
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
 - ✅ **更新推送通知** —— Cloudflare Cron 定时检查全部自动渠道应用,发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);支持按应用关闭推送、去重防骚扰
 - ✅ **更新提醒** —— 最新版本与当前版本不一致时,卡片高亮「有新版本」,支持一键「已更新」标记
+- 🔐 **管理员登录** —— 右上角登录后才能添加/编辑/删除/刷新监控应用;访客默认只读,仅可查看页面信息
 - ✅ **批量刷新** —— 一键刷新全部自动渠道应用,逐一显示进度
 - ✅ **搜索筛选** —— 按名称 / 仓库 / 包 ID / 备注搜索,按渠道筛选
 - 📱 **移动端优先** —— 响应式布局(适配 360px~430px 常见手机屏宽)、大号点击区域、刘海屏安全区适配、深色模式自动跟随系统
@@ -45,8 +46,9 @@
 2. 构建配置保持默认(会自动执行 `npx wrangler deploy`)并部署
 3. 创建 KV 命名空间:左侧 **存储和数据库 → KV** → 创建命名空间(如 `app-version`)
 4. 回到该 Worker → **设置 → 绑定** → 添加 **KV 命名空间**:变量名称填 `APP_KV`,选择刚创建的命名空间
-5. (可选)配置更新推送通知 → 见下文「通知推送配置」
-6. (可选)绑定自定义域名:Worker **设置 → 域和路由** 添加 `app-version.kevinlidk.cn`
+5. **(必配)设置管理员密码** → 见下文「管理员与权限」
+6. (可选)配置更新推送通知 → 见下文「通知推送配置」
+7. (可选)绑定自定义域名:Worker **设置 → 域和路由** 添加 `app-version.kevinlidk.cn`
 
 > 未绑定 KV 前访问页面会提示「未绑定 KV 存储」,按第 3~4 步补上即可。
 
@@ -60,19 +62,39 @@ npx wrangler kv namespace create APP_KV
 npx wrangler deploy
 ```
 
+## 管理员与权限
+
+页面默认为**访客只读视图**:可以查看应用列表、版本与更新状态,不能做任何修改。
+
+- 管理员通过**右上角「登录」**输入密码后,才能添加 / 编辑 / 删除应用及手动刷新版本
+- 密码来自环境变量 **`ADMIN_PASSWORD`(必配)**:
+
+```bash
+npx wrangler secret put ADMIN_PASSWORD
+# 或在 Dashboard → Worker「设置 → 变量和机密」中添加,类型选「机密」
+```
+
+- 未配置 `ADMIN_PASSWORD` 时,**所有编辑接口都会拒绝**(页面保持只读),不会放行
+- 登录后会话保持 **7 天**(HttpOnly + Secure Cookie);「退出」立即失效
+- 防爆破保护:同一 IP 连续输错 10 次密码,锁定 15 分钟
+- 密码比较采用恒定时间比较(先 SHA-256 再逐字节异或),避免计时侧信道
+
 ## 通知推送配置
 
 定时检查由 `wrangler.toml` 中的 `[triggers] crons` 驱动(默认每 6 小时一次,可自行修改;注释掉该配置块即可关闭)。检查发现新版本后,把所有更新**聚合为一条消息**发送到已配置的渠道;每个应用可在编辑弹窗中单独关闭「推送通知」。
 
 通过 Secret 或 Dashboard「设置 → 变量和机密」按需配置(可叠加多个渠道):
 
-| 环境变量 | 渠道 | 说明 |
+| 环境变量 | 必配 | 说明 |
 | --- | --- | --- |
-| `FEISHU_WEBHOOK_URL` | 飞书 | 群自定义机器人 webhook 地址 |
-| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Telegram | Bot 发消息 |
-| `BARK_URL` | Bark(iOS) | 设备推送地址,如 `https://api.day.app/yourkey` |
-| `SERVERCHAN_SENDKEY` | Server酱 | 微信端接收,填 SendKey |
-| `NOTIFY_WEBHOOK_URL` | 通用 | POST `{title, text, apps[]}` JSON |
+| `APP_KV`(KV 绑定) | ✅ | 应用列表存储 |
+| `ADMIN_PASSWORD` | ✅ | 管理员密码,编辑类接口的登录凭据(见「管理员与权限」) |
+| `GITHUB_TOKEN` | 推荐 | 提升 GitHub API 速率限制(GitHub 渠道与 winget 渠道共用) |
+| `FEISHU_WEBHOOK_URL` | 可选 | 飞书群自定义机器人 webhook 地址 |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | 可选 | Telegram Bot 发消息 |
+| `BARK_URL` | 可选 | Bark(iOS)设备推送地址,如 `https://api.day.app/yourkey` |
+| `SERVERCHAN_SENDKEY` | 可选 | Server酱 SendKey,微信端接收 |
+| `NOTIFY_WEBHOOK_URL` | 可选 | 通用 webhook,POST `{title, text, apps[]}` JSON |
 
 ```bash
 npx wrangler secret put FEISHU_WEBHOOK_URL
@@ -95,13 +117,16 @@ npm test         # API + 定时推送冒烟测试(离线)
 
 ## API 一览
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/apps` | 获取应用列表 |
-| POST | `/api/apps` | 新增应用 |
-| PUT | `/api/apps/:id` | 更新应用 |
-| DELETE | `/api/apps/:id` | 删除应用 |
-| POST | `/api/apps/:id/refresh` | 查询最新版本(GitHub / Chocolatey / winget 渠道) |
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/session` | 公开 | 查询登录态与是否已配置密码 |
+| POST | `/api/login` | 公开 | 管理员登录(种下会话 Cookie) |
+| POST | `/api/logout` | 公开 | 退出登录并销毁会话 |
+| GET | `/api/apps` | 公开 | 获取应用列表(访客只读) |
+| POST | `/api/apps` | 管理员 | 新增应用 |
+| PUT | `/api/apps/:id` | 管理员 | 更新应用 |
+| DELETE | `/api/apps/:id` | 管理员 | 删除应用 |
+| POST | `/api/apps/:id/refresh` | 管理员 | 查询最新版本(GitHub / Chocolatey / winget 渠道) |
 
 应用记录示例:
 

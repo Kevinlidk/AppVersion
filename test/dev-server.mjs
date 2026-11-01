@@ -20,12 +20,15 @@ const PUBLIC = path.resolve(ROOT, "../public");
 
 const kvStore = new Map();
 const NOTIFY_URL = "http://127.0.0.1:" + PORT + "/__notify";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 const env = {
   NOTIFY_WEBHOOK_URL: NOTIFY_URL,
   CHECK_GAP_MS: "10",
+  ADMIN_PASSWORD,
   APP_KV: {
     async get(k) { return kvStore.has(k) ? kvStore.get(k) : null; },
     async put(k, v) { kvStore.set(k, String(v)); },
+    async delete(k) { kvStore.delete(k); },
   },
 };
 const ctx = { waitUntil() {}, passThroughOnException() {} };
@@ -109,7 +112,15 @@ const server = http.createServer(async (req, res) => {
       const body = chunks.length ? Buffer.concat(chunks).toString("utf8") : undefined;
       const resp = await worker.fetch(new Request(url.href, { method: req.method, headers: req.headers, body }), env, ctx);
       res.statusCode = resp.status;
-      resp.headers.forEach((v, k) => res.setHeader(k, v));
+      const cookies = [];
+      for (const [k, v] of resp.headers.entries()) {
+        if (k.toLowerCase() === "set-cookie") continue;
+        res.setHeader(k, v);
+      }
+      // 本地 http 预览:去掉 Secure 标记,否则浏览器不接受会话 Cookie
+      const setCookies = typeof resp.headers.getSetCookie === "function" ? resp.headers.getSetCookie() : [];
+      for (const c of setCookies) cookies.push(c.replace(/;\s*Secure/gi, ""));
+      if (cookies.length) res.setHeader("set-cookie", cookies);
       res.end(Buffer.from(await resp.arrayBuffer()));
       return;
     }
@@ -132,5 +143,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log("本地预览: http://127.0.0.1:" + PORT + "  (KV 为内存模拟,GitHub/Chocolatey 返回示例数据)");
+  console.log("演示管理员密码: " + ADMIN_PASSWORD + "  (可用环境变量 ADMIN_PASSWORD 覆盖)");
   console.log("手动触发定时检查: curl -X POST http://127.0.0.1:" + PORT + "/__run-check");
 });
