@@ -89,7 +89,7 @@
     padding: 0 14px; font-size: 16px;
   }
   #searchInput:focus, dialog input:focus, dialog select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .chips { display: flex; gap: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip {
     min-height: 38px; padding: 0 14px;
     border-radius: 999px; border: 1px solid var(--border);
@@ -159,6 +159,15 @@
     background: var(--bg); color: var(--text);
     padding: 8px 12px; font-size: 16px;
   }
+  dialog label.check-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 16px; font-size: 14px; font-weight: 500; color: var(--text);
+  }
+  dialog label.check-row input {
+    width: 19px; height: 19px; min-height: 0; margin: 0; padding: 0;
+    accent-color: var(--accent); flex-shrink: 0;
+  }
+  .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   .dlg-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
   /* ── 轻提示 ── */
@@ -193,6 +202,8 @@
     <div class="chips" id="channelChips">
       <button class="chip active" data-channel="all">全部</button>
       <button class="chip" data-channel="github">GitHub</button>
+      <button class="chip" data-channel="chocolatey">Choco</button>
+      <button class="chip" data-channel="winget">winget</button>
       <button class="chip" data-channel="manual">手动</button>
     </div>
   </div>
@@ -218,17 +229,24 @@
     <label>版本来源
       <select name="channel" id="channelSelect">
         <option value="github">GitHub Releases(自动查询)</option>
+        <option value="chocolatey">Chocolatey 社区源(自动查询)</option>
+        <option value="winget">winget 官方源(自动查询)</option>
         <option value="manual">手动维护</option>
       </select>
     </label>
-    <label id="repoLabel">仓库(owner/repo)
-      <input name="repo" maxlength="100" placeholder="如:telegramdesktop/tdesktop" autocapitalize="off" spellcheck="false">
+    <p class="hint" id="channelHint"></p>
+    <label id="sourceLabel"><span id="sourceLabelText">仓库(owner/repo)</span>
+      <input name="source" id="sourceInput" maxlength="100" autocapitalize="off" spellcheck="false">
     </label>
     <label><span id="versionLabelText">当前版本</span>
       <input name="version" maxlength="50" placeholder="如:v1.2.3">
     </label>
     <label>备注
       <input name="note" maxlength="100" placeholder="可选">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" id="notifyInput" checked>
+      <span>发现新版本时推送通知(渠道配置见 README)</span>
     </label>
     <div class="dlg-actions">
       <button type="button" class="btn ghost" id="cancelBtn">取消</button>
@@ -292,7 +310,7 @@ function fmtTime(iso) {
 
 /* none=尚未查询 fresh=已获取最新但未记录当前版本 ok=已是最新 update=有新版本 */
 function statusOf(a) {
-  if (a.channel !== "github" || !a.latestVersion) return "none";
+  if (a.channel === "manual" || !a.latestVersion) return "none";
   if (!a.version) return "fresh";
   return normV(a.latestVersion) === normV(a.version) ? "ok" : "update";
 }
@@ -305,28 +323,41 @@ function badgeOf(a) {
   return "";
 }
 
-function cardHtml(a) {
-  const gh = a.channel === "github";
-  const st = statusOf(a);
-  const repoUrl = a.releaseUrl || (a.repo ? "https://github.com/" + a.repo : "");
-  const meta = [];
-  if (gh && a.repo) {
-    meta.push('<a href="' + esc(repoUrl) + '" target="_blank" rel="noopener">' + esc(a.repo) + "</a>");
-  } else {
-    meta.push(esc(gh ? "GitHub" : "手动维护"));
+function sourceMeta(a) {
+  if (a.channel === "github") {
+    if (a.repo) return { label: a.repo, url: a.releaseUrl || "https://github.com/" + a.repo };
+    return { label: "GitHub" };
   }
+  if (a.channel === "chocolatey") {
+    if (a.packageId) return { label: a.packageId, url: a.releaseUrl || "https://community.chocolatey.org/packages/" + a.packageId };
+    return { label: "Chocolatey" };
+  }
+  if (a.channel === "winget") {
+    if (a.packageId) return { label: a.packageId, url: a.releaseUrl || "https://winget.run/pkg/" + a.packageId };
+    return { label: "winget" };
+  }
+  return { label: "手动维护" };
+}
+
+function cardHtml(a) {
+  const manual = a.channel === "manual";
+  const st = statusOf(a);
+  const src = sourceMeta(a);
+  const meta = [];
+  if (src.url) meta.push('<a href="' + esc(src.url) + '" target="_blank" rel="noopener">' + esc(src.label) + "</a>");
+  else meta.push(esc(src.label));
   if (a.lastCheckedAt) meta.push("检查于 " + esc(fmtTime(a.lastCheckedAt)));
   return `
     <article class="card" data-id="${a.id}">
       <div class="card-top"><h3 class="app-name">${esc(a.name)}</h3>${badgeOf(a)}</div>
       <div class="ver">
-        <div><span class="ver-label">${gh ? "当前" : "版本"}</span><b>${esc(a.version || "—")}</b></div>
-        ${gh && a.latestVersion ? `<div><span class="ver-label">最新</span><b${st === "update" ? ' class="new"' : ""}>${esc(a.latestVersion)}</b></div>` : ""}
+        <div><span class="ver-label">${manual ? "版本" : "当前"}</span><b>${esc(a.version || "—")}</b></div>
+        ${!manual && a.latestVersion ? `<div><span class="ver-label">最新</span><b${st === "update" ? ' class="new"' : ""}>${esc(a.latestVersion)}</b></div>` : ""}
       </div>
       <div class="meta">${meta.join('<span aria-hidden="true">·</span>')}</div>
       ${a.note ? `<p class="note">${esc(a.note)}</p>` : ""}
       <div class="card-actions">
-        ${gh ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
+        ${!manual ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
         ${st === "update" ? '<button class="btn act-marked">已更新</button>' : ""}
         <button class="btn act-edit">编辑</button>
         <button class="btn danger-text act-del">删除</button>
@@ -339,7 +370,7 @@ function render() {
   const shown = apps.filter((a) => {
     if (filter.channel !== "all" && a.channel !== filter.channel) return false;
     if (!q) return true;
-    return [a.name, a.repo, a.note].some((v) => (v || "").toLowerCase().includes(q));
+    return [a.name, a.repo, a.packageId, a.note].some((v) => (v || "").toLowerCase().includes(q));
   });
   const updateCount = apps.filter((a) => statusOf(a) === "update").length;
   $("#stats").textContent = apps.length
@@ -387,8 +418,8 @@ async function refreshOne(id, btn) {
 }
 
 async function refreshAll() {
-  const targets = apps.filter((a) => a.channel === "github" && a.repo);
-  if (!targets.length) { toast("没有可自动查询的 GitHub 渠道应用"); return; }
+  const targets = apps.filter((a) => a.channel !== "manual");
+  if (!targets.length) { toast("没有可自动查询的应用"); return; }
   const btn = $("#refreshAllBtn");
   btn.disabled = true;
   let ok = 0, fail = 0;
@@ -432,10 +463,40 @@ async function markUpdated(app) {
 const dlg = $("#appDialog");
 const form = $("#appForm");
 
+const CHANNEL_META = {
+  github: {
+    label: "仓库(owner/repo)",
+    placeholder: "如:telegramdesktop/tdesktop",
+    hint: "通过 GitHub API 自动查询最新 Release",
+  },
+  chocolatey: {
+    label: "包 ID(Chocolatey)",
+    placeholder: "如:vlc,或直接粘贴包页面链接",
+    hint: "查询 Chocolatey 社区源官方 API(UniGetUI 聚合的同一数据源)",
+  },
+  winget: {
+    label: "包 ID(winget)",
+    placeholder: "如:VideoLAN.VLC",
+    hint: "查询 winget 官方清单仓库,包 ID 需含发布者前缀",
+  },
+  manual: {
+    label: "",
+    placeholder: "",
+    hint: "不自动查询,需要时手动更新版本号",
+  },
+};
+
 function syncChannelUi() {
-  const gh = form.channel.value === "github";
-  $("#repoLabel").classList.toggle("hidden", !gh);
-  $("#versionLabelText").textContent = gh ? "当前版本" : "版本号";
+  const ch = form.channel.value;
+  const m = CHANNEL_META[ch];
+  const auto = ch !== "manual";
+  $("#sourceLabel").classList.toggle("hidden", !auto);
+  if (auto) {
+    $("#sourceLabelText").textContent = m.label;
+    $("#sourceInput").placeholder = m.placeholder;
+  }
+  $("#channelHint").textContent = m.hint;
+  $("#versionLabelText").textContent = auto ? "当前版本" : "版本号";
 }
 
 function openDialog(app) {
@@ -443,9 +504,10 @@ function openDialog(app) {
   $("#dlgTitle").textContent = app ? "编辑应用" : "添加应用";
   form.name.value = app ? app.name : "";
   form.channel.value = app ? app.channel : "github";
-  form.repo.value = app ? (app.repo || "") : "";
+  form.source.value = app ? (app.repo || app.packageId || "") : "";
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
+  $("#notifyInput").checked = app ? app.notify !== false : true;
   syncChannelUi();
   dlg.showModal();
 }
@@ -456,15 +518,20 @@ dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const ch = form.channel.value;
+  const source = form.source.value.trim();
   const payload = {
     name: form.name.value.trim(),
-    channel: form.channel.value,
-    repo: form.repo.value.trim(),
+    channel: ch,
     version: form.version.value.trim(),
     note: form.note.value.trim(),
+    notify: $("#notifyInput").checked,
   };
+  if (ch === "github") payload.repo = source;
+  else if (ch !== "manual") payload.packageId = source;
   if (!payload.name) { toast("请填写应用名称", "error"); return; }
-  if (payload.channel === "github" && !payload.repo) { toast("请填写仓库 owner/repo", "error"); return; }
+  if (ch === "github" && !payload.repo) { toast("请填写仓库 owner/repo", "error"); return; }
+  if ((ch === "chocolatey" || ch === "winget") && !payload.packageId) { toast("请填写包 ID", "error"); return; }
   const saveBtn = $("#saveBtn");
   saveBtn.disabled = true;
   try {
@@ -476,7 +543,7 @@ form.addEventListener("submit", async (e) => {
       const created = await api("/api/apps", { method: "POST", body: payload });
       apps.unshift(created);
       toast("已添加,正在查询最新版本…");
-      if (created.channel === "github") refreshOne(created.id).catch(() => {});
+      if (created.channel !== "manual") refreshOne(created.id).catch(() => {});
     }
     render();
     dlg.close();
