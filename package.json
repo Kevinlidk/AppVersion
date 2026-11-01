@@ -1,0 +1,16 @@
+{
+  "name": "app-version",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "应用版本检测 —— 实时管理和查询所关注应用的最新版本,部署于 Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "serve": "node test/dev-server.mjs",
+    "deploy": "wrangler deploy",
+    "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

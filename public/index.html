@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+<title>应用版本检测</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --text: #101828;
+    --muted: #667085;
+    --border: #e4e7ec;
+    --accent: #2563eb;
+    --accent-weak: #eff4ff;
+    --ok: #067647;
+    --ok-bg: #ecfdf3;
+    --warn: #b54708;
+    --warn-bg: #fffaeb;
+    --danger: #d92d20;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220;
+      --card: #111a2c;
+      --text: #e6eaf2;
+      --muted: #98a2b3;
+      --border: #22304a;
+      --accent: #60a5fa;
+      --accent-weak: #16233c;
+      --ok: #4ade80;
+      --ok-bg: #0c2a1e;
+      --warn: #fbbf24;
+      --warn-bg: #2a1f0c;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .container { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+  .hidden { display: none !important; }
+
+  /* ── 顶栏 ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    padding-top: env(safe-area-inset-top);
+    background: var(--bg);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 56px; }
+  h1 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
+
+  /* ── 按钮 ── */
+  .btn {
+    min-height: 40px; padding: 0 14px;
+    border-radius: 10px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    transition: transform .06s, opacity .2s;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn.danger-text { color: var(--danger); }
+  .btn[disabled] { opacity: .55; pointer-events: none; }
+
+  /* ── 工具栏 ── */
+  .toolbar { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  @media (min-width: 560px) { .toolbar { flex-direction: row; align-items: center; } }
+  #searchInput {
+    flex: 1; width: 100%; min-height: 42px;
+    border-radius: 10px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text);
+    padding: 0 14px; font-size: 16px;
+  }
+  #searchInput:focus, dialog input:focus, dialog select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .chips { display: flex; gap: 8px; }
+  .chip {
+    min-height: 38px; padding: 0 14px;
+    border-radius: 999px; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted);
+    font-size: 13px; cursor: pointer;
+  }
+  .chip.active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .stats { color: var(--muted); font-size: 13px; margin-top: 12px; min-height: 1.2em; }
+
+  /* ── 应用卡片 ── */
+  .list { display: grid; gap: 12px; margin-top: 12px; }
+  @media (min-width: 640px) { .list { grid-template-columns: 1fr 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .app-name { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+  .badge {
+    flex-shrink: 0; font-size: 12px; font-weight: 600;
+    padding: 3px 9px; border-radius: 999px;
+    background: var(--accent-weak); color: var(--accent);
+  }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .ver { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 10px 0 4px; }
+  .ver-label { color: var(--muted); font-size: 12.5px; margin-right: 6px; }
+  .ver b { font-size: 14.5px; overflow-wrap: anywhere; }
+  .ver b.new { color: var(--warn); }
+  .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
+  .meta a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+  .meta a:active { opacity: .7; }
+  .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; overflow-wrap: anywhere; }
+  .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .card-actions .btn { min-height: 36px; padding: 0 12px; font-size: 13px; }
+
+  /* ── 空状态 ── */
+  .empty { text-align: center; color: var(--muted); padding: 56px 16px 32px; }
+  .empty .big { font-size: 44px; margin-bottom: 8px; }
+  .empty .btn { margin-top: 14px; }
+
+  /* ── 悬浮添加按钮 ── */
+  .fab {
+    position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+    width: 56px; height: 56px; border-radius: 50%;
+    border: none; background: var(--accent); color: #fff;
+    font-size: 28px; line-height: 1; cursor: pointer; z-index: 20;
+    box-shadow: 0 8px 24px rgba(37, 99, 235, .35);
+    transition: transform .08s;
+  }
+  .fab:active { transform: scale(.94); }
+
+  /* ── 弹窗表单 ── */
+  dialog {
+    border: none; border-radius: 16px;
+    background: var(--card); color: var(--text);
+    width: min(420px, 92vw); padding: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
+  }
+  dialog::backdrop { background: rgba(2, 6, 23, .55); }
+  dialog h2 { font-size: 17px; margin: 0 0 4px; }
+  dialog label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-top: 14px; }
+  dialog input, dialog select {
+    width: 100%; margin-top: 6px; min-height: 42px;
+    border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+    padding: 8px 12px; font-size: 16px;
+  }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+  /* ── 轻提示 ── */
+  .toast {
+    position: fixed; left: 50%; bottom: calc(88px + env(safe-area-inset-bottom));
+    transform: translateX(-50%) translateY(8px);
+    background: #101828; color: #fff;
+    padding: 10px 16px; border-radius: 10px;
+    font-size: 14px; max-width: 88vw; text-align: center;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+    z-index: 30;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.error { background: var(--danger); }
+
+  .footer { text-align: center; color: var(--muted); font-size: 12.5px; padding: 28px 0 96px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="container topbar-inner">
+    <h1><span aria-hidden="true">📦</span>应用版本检测</h1>
+    <button id="refreshAllBtn" class="btn ghost">⟳ 全部刷新</button>
+  </div>
+</header>
+
+<main class="container">
+  <div class="toolbar">
+    <input id="searchInput" type="search" placeholder="搜索名称、仓库或备注…" autocomplete="off">
+    <div class="chips" id="channelChips">
+      <button class="chip active" data-channel="all">全部</button>
+      <button class="chip" data-channel="github">GitHub</button>
+      <button class="chip" data-channel="manual">手动</button>
+    </div>
+  </div>
+
+  <div id="stats" class="stats"></div>
+  <div id="list" class="list"></div>
+
+  <div id="emptyState" class="empty hidden">
+    <div class="big" aria-hidden="true">📭</div>
+    <p>还没有关注任何应用<br>添加后即可在这里跟踪它们的最新版本</p>
+    <button class="btn primary" id="emptyAddBtn">＋ 添加第一个应用</button>
+  </div>
+</main>
+
+<button id="addBtn" class="fab" aria-label="添加应用">＋</button>
+
+<dialog id="appDialog">
+  <form id="appForm" novalidate>
+    <h2 id="dlgTitle">添加应用</h2>
+    <label>应用名称
+      <input name="name" required maxlength="50" placeholder="如:Telegram Desktop">
+    </label>
+    <label>版本来源
+      <select name="channel" id="channelSelect">
+        <option value="github">GitHub Releases(自动查询)</option>
+        <option value="manual">手动维护</option>
+      </select>
+    </label>
+    <label id="repoLabel">仓库(owner/repo)
+      <input name="repo" maxlength="100" placeholder="如:telegramdesktop/tdesktop" autocapitalize="off" spellcheck="false">
+    </label>
+    <label><span id="versionLabelText">当前版本</span>
+      <input name="version" maxlength="50" placeholder="如:v1.2.3">
+    </label>
+    <label>备注
+      <input name="note" maxlength="100" placeholder="可选">
+    </label>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="cancelBtn">取消</button>
+      <button type="submit" class="btn primary" id="saveBtn">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<footer class="footer">
+  AppVersion · 运行于 Cloudflare Workers ·
+  <a href="https://github.com/Kevinlidk/AppVersion" target="_blank" rel="noopener">GitHub 仓库</a>
+</footer>
+
+<div id="toast" class="toast" role="status"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const listEl = $("#list");
+let apps = [];
+let filter = { q: "", channel: "all" };
+let editingId = null;
+
+const normV = (v) => String(v || "").trim().replace(/^v/i, "");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+));
+
+async function api(path, opts = {}) {
+  const init = { ...opts };
+  if (init.body && typeof init.body !== "string") {
+    init.body = JSON.stringify(init.body);
+    init.headers = { "content-type": "application/json", ...(init.headers || {}) };
+  }
+  const res = await fetch(path, init);
+  let data = {};
+  try { data = await res.json(); } catch { /* 非JSON响应 */ }
+  if (!res.ok) throw new Error(data.error || "请求失败(HTTP " + res.status + ")");
+  return data;
+}
+
+let toastTimer = null;
+function toast(msg, type) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.className = "toast show" + (type === "error" ? " error" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = "toast"; }, 2600);
+}
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const opts = sameYear
+    ? { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }
+    : { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" };
+  return d.toLocaleString("zh-CN", opts);
+}
+
+/* none=尚未查询 fresh=已获取最新但未记录当前版本 ok=已是最新 update=有新版本 */
+function statusOf(a) {
+  if (a.channel !== "github" || !a.latestVersion) return "none";
+  if (!a.version) return "fresh";
+  return normV(a.latestVersion) === normV(a.version) ? "ok" : "update";
+}
+
+function badgeOf(a) {
+  const st = statusOf(a);
+  if (st === "update") return '<span class="badge warn">有新版本</span>';
+  if (st === "ok") return '<span class="badge ok">已是最新</span>';
+  if (st === "fresh") return '<span class="badge">已获取</span>';
+  return "";
+}
+
+function cardHtml(a) {
+  const gh = a.channel === "github";
+  const st = statusOf(a);
+  const repoUrl = a.releaseUrl || (a.repo ? "https://github.com/" + a.repo : "");
+  const meta = [];
+  if (gh && a.repo) {
+    meta.push('<a href="' + esc(repoUrl) + '" target="_blank" rel="noopener">' + esc(a.repo) + "</a>");
+  } else {
+    meta.push(esc(gh ? "GitHub" : "手动维护"));
+  }
+  if (a.lastCheckedAt) meta.push("检查于 " + esc(fmtTime(a.lastCheckedAt)));
+  return `
+    <article class="card" data-id="${a.id}">
+      <div class="card-top"><h3 class="app-name">${esc(a.name)}</h3>${badgeOf(a)}</div>
+      <div class="ver">
+        <div><span class="ver-label">${gh ? "当前" : "版本"}</span><b>${esc(a.version || "—")}</b></div>
+        ${gh && a.latestVersion ? `<div><span class="ver-label">最新</span><b${st === "update" ? ' class="new"' : ""}>${esc(a.latestVersion)}</b></div>` : ""}
+      </div>
+      <div class="meta">${meta.join('<span aria-hidden="true">·</span>')}</div>
+      ${a.note ? `<p class="note">${esc(a.note)}</p>` : ""}
+      <div class="card-actions">
+        ${gh ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
+        ${st === "update" ? '<button class="btn act-marked">已更新</button>' : ""}
+        <button class="btn act-edit">编辑</button>
+        <button class="btn danger-text act-del">删除</button>
+      </div>
+    </article>`;
+}
+
+function render() {
+  const q = filter.q.trim().toLowerCase();
+  const shown = apps.filter((a) => {
+    if (filter.channel !== "all" && a.channel !== filter.channel) return false;
+    if (!q) return true;
+    return [a.name, a.repo, a.note].some((v) => (v || "").toLowerCase().includes(q));
+  });
+  const updateCount = apps.filter((a) => statusOf(a) === "update").length;
+  $("#stats").textContent = apps.length
+    ? "共 " + apps.length + " 个应用" + (updateCount ? ",其中 " + updateCount + " 个有更新" : "")
+    : "";
+  listEl.innerHTML = shown.map(cardHtml).join("");
+  $("#emptyState").classList.toggle("hidden", apps.length > 0);
+}
+
+async function load() {
+  try {
+    apps = await api("/api/apps");
+    render();
+  } catch (e) {
+    listEl.innerHTML = `
+      <div class="empty">
+        <div class="big" aria-hidden="true">⚠️</div>
+        <p>${esc(e.message)}</p>
+      </div>`;
+    $("#emptyState").classList.add("hidden");
+  }
+}
+
+/* ── 单个刷新 / 全部刷新 ── */
+
+async function refreshOne(id, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.orig = btn.textContent;
+    btn.textContent = "查询中…";
+  }
+  try {
+    const updated = await api("/api/apps/" + id + "/refresh", { method: "POST" });
+    apps = apps.map((a) => (a.id === id ? updated : a));
+    render();
+    const st = statusOf(updated);
+    toast(st === "update" ? "发现新版本:" + updated.name + " " + updated.latestVersion
+      : st === "ok" ? updated.name + " 已是最新"
+      : "查询完成:" + updated.name);
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig; }
+  }
+}
+
+async function refreshAll() {
+  const targets = apps.filter((a) => a.channel === "github" && a.repo);
+  if (!targets.length) { toast("没有可自动查询的 GitHub 渠道应用"); return; }
+  const btn = $("#refreshAllBtn");
+  btn.disabled = true;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < targets.length; i++) {
+    btn.textContent = "刷新中 " + (i + 1) + "/" + targets.length;
+    try {
+      const updated = await api("/api/apps/" + targets[i].id + "/refresh", { method: "POST" });
+      apps = apps.map((a) => (a.id === updated.id ? updated : a));
+      ok++;
+    } catch { fail++; }
+    render();
+  }
+  btn.disabled = false;
+  btn.textContent = "⟳ 全部刷新";
+  toast("刷新完成:" + ok + " 成功" + (fail ? "," + fail + " 失败" : ""), ok ? undefined : "error");
+}
+
+/* ── 删除 / 标记已更新 ── */
+
+async function del(app) {
+  if (!confirm("确定删除「" + app.name + "」吗?")) return;
+  try {
+    await api("/api/apps/" + app.id, { method: "DELETE" });
+    apps = apps.filter((a) => a.id !== app.id);
+    render();
+    toast("已删除");
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function markUpdated(app) {
+  try {
+    const updated = await api("/api/apps/" + app.id, { method: "PUT", body: { version: app.latestVersion } });
+    apps = apps.map((a) => (a.id === app.id ? updated : a));
+    render();
+    toast("已标记为 " + updated.version);
+  } catch (e) { toast(e.message, "error"); }
+}
+
+/* ── 添加 / 编辑弹窗 ── */
+
+const dlg = $("#appDialog");
+const form = $("#appForm");
+
+function syncChannelUi() {
+  const gh = form.channel.value === "github";
+  $("#repoLabel").classList.toggle("hidden", !gh);
+  $("#versionLabelText").textContent = gh ? "当前版本" : "版本号";
+}
+
+function openDialog(app) {
+  editingId = app ? app.id : null;
+  $("#dlgTitle").textContent = app ? "编辑应用" : "添加应用";
+  form.name.value = app ? app.name : "";
+  form.channel.value = app ? app.channel : "github";
+  form.repo.value = app ? (app.repo || "") : "";
+  form.version.value = app ? (app.version || "") : "";
+  form.note.value = app ? (app.note || "") : "";
+  syncChannelUi();
+  dlg.showModal();
+}
+
+form.channel.addEventListener("change", syncChannelUi);
+$("#cancelBtn").addEventListener("click", () => dlg.close());
+dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    name: form.name.value.trim(),
+    channel: form.channel.value,
+    repo: form.repo.value.trim(),
+    version: form.version.value.trim(),
+    note: form.note.value.trim(),
+  };
+  if (!payload.name) { toast("请填写应用名称", "error"); return; }
+  if (payload.channel === "github" && !payload.repo) { toast("请填写仓库 owner/repo", "error"); return; }
+  const saveBtn = $("#saveBtn");
+  saveBtn.disabled = true;
+  try {
+    if (editingId) {
+      const updated = await api("/api/apps/" + editingId, { method: "PUT", body: payload });
+      apps = apps.map((a) => (a.id === editingId ? updated : a));
+      toast("已保存");
+    } else {
+      const created = await api("/api/apps", { method: "POST", body: payload });
+      apps.unshift(created);
+      toast("已添加,正在查询最新版本…");
+      if (created.channel === "github") refreshOne(created.id).catch(() => {});
+    }
+    render();
+    dlg.close();
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+/* ── 事件绑定 ── */
+
+listEl.addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const card = btn.closest(".card");
+  const app = apps.find((a) => a.id === (card && card.dataset.id));
+  if (!app) return;
+  if (btn.classList.contains("act-refresh")) refreshOne(app.id, btn);
+  else if (btn.classList.contains("act-edit")) openDialog(app);
+  else if (btn.classList.contains("act-del")) del(app);
+  else if (btn.classList.contains("act-marked")) markUpdated(app);
+});
+
+$("#searchInput").addEventListener("input", (e) => { filter.q = e.target.value; render(); });
+
+$("#channelChips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  filter.channel = chip.dataset.channel;
+  document.querySelectorAll("#channelChips .chip").forEach((c) => c.classList.toggle("active", c === chip));
+  render();
+});
+
+$("#refreshAllBtn").addEventListener("click", refreshAll);
+$("#addBtn").addEventListener("click", () => openDialog(null));
+$("#emptyAddBtn").addEventListener("click", () => openDialog(null));
+
+load();
+</script>
+</body>
+</html>

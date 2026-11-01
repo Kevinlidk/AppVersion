@@ -1,0 +1,29 @@
+# Cloudflare Workers 配置
+# 部署:Dashboard 导入本仓库后自动构建;或本地执行 `npx wrangler deploy`
+
+name = "app-version"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# 前端静态页面目录(Workers Static Assets):
+# 静态文件优先命中,未命中的 /api/* 请求交给 src/worker.js 处理
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# ── KV 存储(必配)────────────────────────────────────────
+# 保存应用列表需要绑定一个 KV 命名空间,两种方式任选其一:
+#
+# 方式 A(Dashboard 导入部署):部署后在 Worker 的
+#   「设置 → 绑定 → KV 命名空间」添加绑定,变量名称填 APP_KV
+#
+# 方式 B(wrangler CLI 部署):先执行
+#   npx wrangler kv namespace create APP_KV
+# 然后取消下面三行注释,并把 id 替换为命令输出的真实 id:
+#
+# [[kv_namespaces]]
+# binding = "APP_KV"
+# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[observability]
+enabled = true
