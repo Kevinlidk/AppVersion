@@ -11,6 +11,7 @@
   - **GitHub Releases**:自动拉取最新正式版,无 latest 时回退最近一条 Release
   - **Chocolatey 社区源**:优先读 `/api/v2/package/{id}` 的 302 重定向(约 165 字节,从 nupkg 文件名取版本),失败时回退 OData 查询
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
+  - **官方自查(自定义 API)**:填入厂商公开的版本 API 地址 + 版本字段路径,直接读取最新版本号。适用于 Chrome、.NET 这类提供结构化版本数据但没有标准 Release 接口的应用
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
 - ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
 - ✅ **更新提醒** —— 最新版本号以绿色显示;与当前版本不一致时卡片高亮「有新版本」,支持一键「已更新」标记
@@ -205,6 +206,31 @@ npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
 > 💡 **Chocolatey 403 说明**:Chocolatey 的 WAF 会拦截部分云服务商出口 IP。本项目已改为读取 302 重定向里的版本号(极轻量)并补齐常规请求头;若仍被拦截,错误信息会提示改用 winget 渠道。
 >
 > 推送语义:仅对**勾选了"发现新版本时推送通知"**的应用做定时检查与推送(新建应用默认不勾选);手动刷新过的版本视为已知悉,不会重复推送;全部渠道发送失败时保留标记,下个周期自动重试。
+
+## 官方自查渠道(自定义版本 API)
+
+适用于厂商提供公开版本接口、但没有标准 Release 的应用。添加应用时选择「官方自查(自定义 API)」,填两个字段:
+
+| 字段 | 说明 |
+| --- | --- |
+| 官方 API 地址 | 必须是 **https** 公网地址(内网/本机地址会被拒绝) |
+| 版本字段路径 | 从该 JSON 中取版本号的路径 |
+
+**字段路径语法**
+
+- `releases.0.version` —— 逐层取键;纯数字片段表示数组下标
+- `releases-index[channel-version=10.0].latest-release` —— 方括号内为过滤条件:`字段=值`,在该数组中找到首个匹配元素后继续取值
+
+**现成示例**
+
+| 应用 | API 地址 | 字段路径 |
+| --- | --- | --- |
+| Google Chrome(win64 stable) | `https://gcvh.kevinlidk.cn/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=fraction=1&pageSize=1` | `releases.0.version` |
+| Microsoft .NET 10.0 | `https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json` | `releases-index[channel-version=10.0].latest-release` |
+
+> 💡 Chrome 那个接口默认返回 1300+ 条记录(约 470 KB)。追加 **`&pageSize=1`** 后只返回 1 条(约 380 字节),是推荐写法。
+>
+> 响应上限 5 MB;超过会提示改用分页/精简地址。非 JSON 响应或路径取不到值都会给出明确错误提示。
 
 ## 本地开发
 

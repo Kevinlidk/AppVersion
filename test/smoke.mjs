@@ -89,6 +89,27 @@ globalThis.fetch = async (input, init) => {
     hookCalls.push({ url: u, body: init && init.body });
     return new Response("{}", { status: 200 });
   }
+  // 官方自查渠道的模拟响应
+  if (u.startsWith("https://official.example/")) {
+    if (u.includes("/notjson")) return new Response("<html>oops</html>", { status: 200 });
+    if (u.includes("/missing")) return new Response(JSON.stringify({ releases: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    if (u.includes("/chrome")) {
+      return new Response(
+        JSON.stringify({ releases: [{ version: "156.0.8078.80", fraction: 1 }, { version: "155.0.8059.85" }] }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        "releases-index": [
+          { "channel-version": "11.0", "latest-release": "11.0.0-rc.3" },
+          { "channel-version": "10.0", "latest-release": "10.0.14" },
+          { "channel-version": "9.0", "latest-release": "9.0.22" },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }
   return realFetch(input, init);
 };
 
@@ -337,6 +358,66 @@ await test("POST 新增 winget 应用并查询:多段版本号正确排序取最
   const app = await bodyOf(res);
   assertEq(app.latestVersion, "9.10.0", "版本排序(9.10.0 > 9.9.9)");
   if (!/winget-pkgs\/tree\/master\/manifests\/v\/VideoLAN\/VLC$/.test(app.releaseUrl)) throw new Error("releaseUrl 不符: " + app.releaseUrl);
+});
+
+await test("官方自查:Chrome 风格响应按 releases.0.version 取值", async () => {
+  const created = await bodyOf(await call("/api/apps", post({
+    name: "Google Chrome", channel: "official",
+    officialUrl: "https://official.example/chrome?pageSize=1", jsonPath: "releases.0.version",
+  })));
+  const res = await call("/api/apps/" + created.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "状态码");
+  assertEq((await bodyOf(res)).latestVersion, "156.0.8078.80", "版本号");
+});
+
+await test("官方自查:.NET 风格响应按 [channel-version=10.0] 过滤取值", async () => {
+  const created = await bodyOf(await call("/api/apps", post({
+    name: ".NET 10", channel: "official",
+    officialUrl: "https://official.example/dotnet/releases-index.json",
+    jsonPath: "releases-index[channel-version=10.0].latest-release",
+  })));
+  const res = await call("/api/apps/" + created.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "状态码");
+  assertEq((await bodyOf(res)).latestVersion, "10.0.14", "过滤后版本");
+});
+
+await test("官方自查:非法 URL / 内网地址 / 缺字段路径 均返回 400", async () => {
+  assertEq((await call("/api/apps", post({ name: "X", channel: "official", officialUrl: "ftp://a/b", jsonPath: "a" }))).status, 400, "非 https");
+  assertEq((await call("/api/apps", post({ name: "X", channel: "official", officialUrl: "http://official.example/a", jsonPath: "a" }))).status, 400, "http");
+  const lan = await call("/api/apps", post({ name: "X", channel: "official", officialUrl: "https://127.0.0.1/a.json", jsonPath: "a" }));
+  assertEq(lan.status, 400, "内网地址");
+  if (!/内网|本机/.test((await bodyOf(lan)).error)) throw new Error("缺少内网提示");
+  assertEq((await call("/api/apps", post({ name: "X", channel: "official", officialUrl: "https://official.example/a", jsonPath: "" }))).status, 400, "缺路径");
+});
+
+await test("官方自查:非 JSON / 路径取不到值 返回明确错误", async () => {
+  const notJson = await bodyOf(await call("/api/apps", post({
+    name: "非JSON", channel: "official", officialUrl: "https://official.example/notjson", jsonPath: "a",
+  })));
+  const r1 = await call("/api/apps/" + notJson.id + "/refresh", { method: "POST" });
+  assertEq(r1.status, 502, "非 JSON 状态码");
+  if (!/不是 JSON/.test((await bodyOf(r1)).error)) throw new Error("缺少 JSON 提示");
+
+  const missing = await bodyOf(await call("/api/apps", post({
+    name: "取值失败", channel: "official", officialUrl: "https://official.example/missing", jsonPath: "releases.0.version",
+  })));
+  const r2 = await call("/api/apps/" + missing.id + "/refresh", { method: "POST" });
+  assertEq(r2.status, 404, "取不到值状态码");
+  if (!/未找到版本字段/.test((await bodyOf(r2)).error)) throw new Error("缺少路径提示");
+
+  // 清理这两个测试应用
+  await call("/api/apps/" + notJson.id, { method: "DELETE" });
+  await call("/api/apps/" + missing.id, { method: "DELETE" });
+});
+
+await test("官方自查:修改 API 地址或字段路径会清空旧查询结果", async () => {
+  const list = await bodyOf(await call("/api/apps"));
+  const target = list.find((a) => a.channel === "official" && a.jsonPath === "releases.0.version");
+  const res = await call("/api/apps/" + target.id, put({ jsonPath: "releases.1.version" }));
+  const updated = await bodyOf(res);
+  if (updated.latestVersion !== undefined) throw new Error("latestVersion 未清空");
+  if (updated.lastCheckedAt !== undefined) throw new Error("lastCheckedAt 未清空");
+  assertEq(updated.jsonPath, "releases.1.version", "路径已更新");
 });
 
 await test("POST refresh:winget 源无此包返回 404", async () => {

@@ -132,7 +132,12 @@
     min-height: 38px; padding: 0 14px;
     border-radius: 999px; border: 1px solid var(--border);
     background: var(--card); color: var(--muted);
-    font-size: 13px; cursor: pointer;
+    font-size: 13px; cursor: pointer; white-space: nowrap;
+  }
+  /* 窄屏:收紧 chip 内边距,让 6 个渠道筛选项在 390px 下排成一行 */
+  @media (max-width: 430px) {
+    .chips { gap: 6px; }
+    .chip { min-height: 34px; padding: 0 10px; font-size: 12.5px; }
   }
   .chip.active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
   .stats { font-size: 13px; margin-top: 12px; min-height: 1.2em; }
@@ -272,6 +277,7 @@
       <button class="chip" data-channel="github">GitHub</button>
       <button class="chip" data-channel="chocolatey">Choco</button>
       <button class="chip" data-channel="winget">winget</button>
+      <button class="chip" data-channel="official">官方</button>
       <button class="chip" data-channel="manual">手动</button>
     </div>
   </div>
@@ -303,6 +309,7 @@
         <option value="github">GitHub Releases(自动查询)</option>
         <option value="chocolatey">Chocolatey 社区源(自动查询)</option>
         <option value="winget">winget 官方源(自动查询)</option>
+        <option value="official">官方自查(自定义 API)</option>
         <option value="manual">手动维护</option>
       </select>
     </label>
@@ -310,6 +317,15 @@
     <label id="sourceLabel"><span id="sourceLabelText">仓库(owner/repo)</span>
       <input name="source" id="sourceInput" maxlength="100" autocapitalize="off" spellcheck="false">
     </label>
+    <div id="officialFields" class="hidden">
+      <label>官方 API 地址(https)
+        <input name="officialUrl" id="officialUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="https://example.com/api/releases.json">
+      </label>
+      <label>版本字段路径
+        <input name="jsonPath" id="jsonPathInput" maxlength="200" autocapitalize="off" spellcheck="false" placeholder="如:releases.0.version">
+      </label>
+      <p class="hint">支持 <code>releases.0.version</code>(数组索引)与 <code>releases-index[channel-version=10.0].latest-release</code>(按字段过滤)</p>
+    </div>
     <label><span id="versionLabelText">当前版本</span>
       <input name="version" maxlength="50" placeholder="如:v1.2.3">
     </label>
@@ -465,6 +481,11 @@ function sourceMeta(a) {
     if (a.packageId) return { label: a.packageId, url: a.releaseUrl || "https://winget.run/pkg/" + a.packageId };
     return { label: "winget" };
   }
+  if (a.channel === "official") {
+    let host = "官方自查";
+    try { host = new URL(a.officialUrl).hostname; } catch { /* 保持默认 */ }
+    return { label: host, url: a.officialUrl || "" };
+  }
   return { label: "手动维护" };
 }
 
@@ -501,7 +522,7 @@ function render() {
   const shown = apps.filter((a) => {
     if (filter.channel !== "all" && a.channel !== filter.channel) return false;
     if (!q) return true;
-    return [a.name, a.repo, a.packageId, a.note].some((v) => (v || "").toLowerCase().includes(q));
+    return [a.name, a.repo, a.packageId, a.officialUrl, a.note].some((v) => (v || "").toLowerCase().includes(q));
   });
   const updateCount = apps.filter((a) => statusOf(a) === "update").length;
   $("#stats").textContent = apps.length
@@ -611,6 +632,11 @@ const CHANNEL_META = {
     placeholder: "如:VideoLAN.VLC",
     hint: "查询 winget 官方清单仓库,包 ID 需含发布者前缀",
   },
+  official: {
+    label: "",
+    placeholder: "",
+    hint: "直接请求厂商公开的版本 API 并读取指定字段,适用于 Chrome、.NET 等提供结构化版本数据的应用",
+  },
   manual: {
     label: "",
     placeholder: "",
@@ -622,8 +648,11 @@ function syncChannelUi() {
   const ch = form.channel.value;
   const m = CHANNEL_META[ch];
   const auto = ch !== "manual";
-  $("#sourceLabel").classList.toggle("hidden", !auto);
-  if (auto) {
+  const official = ch === "official";
+  // 「官方自查」用独立的两行输入,不用单行 source 字段
+  $("#sourceLabel").classList.toggle("hidden", !auto || official);
+  $("#officialFields").classList.toggle("hidden", !official);
+  if (auto && !official) {
     $("#sourceLabelText").textContent = m.label;
     $("#sourceInput").placeholder = m.placeholder;
   }
@@ -637,6 +666,8 @@ function openDialog(app) {
   form.name.value = app ? app.name : "";
   form.channel.value = app ? app.channel : "github";
   form.source.value = app ? (app.repo || app.packageId || "") : "";
+  $("#officialUrlInput").value = app ? (app.officialUrl || "") : "";
+  $("#jsonPathInput").value = app ? (app.jsonPath || "") : "";
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
   $("#notifyInput").checked = app ? app.notify === true : false;
@@ -660,10 +691,18 @@ form.addEventListener("submit", async (e) => {
     notify: $("#notifyInput").checked,
   };
   if (ch === "github") payload.repo = source;
-  else if (ch !== "manual") payload.packageId = source;
+  else if (ch === "chocolatey" || ch === "winget") payload.packageId = source;
+  else if (ch === "official") {
+    payload.officialUrl = $("#officialUrlInput").value.trim();
+    payload.jsonPath = $("#jsonPathInput").value.trim();
+  }
   if (!payload.name) { toast("请填写应用名称", "error"); return; }
   if (ch === "github" && !payload.repo) { toast("请填写仓库 owner/repo", "error"); return; }
   if ((ch === "chocolatey" || ch === "winget") && !payload.packageId) { toast("请填写包 ID", "error"); return; }
+  if (ch === "official") {
+    if (!payload.officialUrl) { toast("请填写官方 API 地址", "error"); return; }
+    if (!payload.jsonPath) { toast("请填写版本字段路径", "error"); return; }
+  }
   const saveBtn = $("#saveBtn");
   saveBtn.disabled = true;
   try {

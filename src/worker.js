@@ -32,6 +32,14 @@ const CHOCO_HEADERS = {
   "accept-language": "en-US,en;q=0.9",
 };
 const CHOCO_HOST = "https://community.chocolatey.org";
+/* 官方自查渠道的请求头:多数厂商 API 要求常规 UA/Accept */
+const OFFICIAL_HEADERS = {
+  "user-agent": UA,
+  accept: "application/json, text/plain, */*",
+  "accept-language": "en-US,en;q=0.9",
+  "cache-control": "no-cache",
+};
+const OFFICIAL_MAX_BYTES = 5 * 1024 * 1024; // 官方 API 响应上限 5 MB
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CHOCO_ID_RE = /^[A-Za-z0-9_.+-]+$/;
 const WINGET_ID_RE = /^[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+$/;
@@ -203,6 +211,114 @@ async function seedSampleIfFirstRun(env, list) {
   return [app];
 }
 
+/**
+ * 校验「官方自查」的 API 地址:只允许公网 https,
+ * 避免把 Worker 当成访问内网/元数据服务的跳板(SSRF)。
+ */
+function validateOfficialUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new ApiError("官方 API 地址格式不正确,应为完整 URL,如 https://example.com/api.json");
+  }
+  if (u.protocol !== "https:") throw new ApiError("官方 API 地址必须使用 https://");
+  const host = u.hostname.toLowerCase();
+  const blocked =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^0\./.test(host) ||
+    host === "[::1]" ||
+    host === "::1" ||
+    /^\[?f[cd][0-9a-f]{2}:/i.test(host);
+  if (blocked) throw new ApiError("官方 API 地址不能指向内网或本机地址");
+  return u.href;
+}
+
+/** 校验版本字段路径:只允许 键名、数字索引、[字段=值] 三种片段 */
+function validateJsonPath(raw) {
+  const path = String(raw || "").trim();
+  if (!path) throw new ApiError("请填写版本字段路径,如 releases.0.version");
+  if (/[\u0000-\u001f]/.test(path)) throw new ApiError("版本字段路径不能包含控制字符");
+  if (!parsePathSegments(path).length) throw new ApiError("版本字段路径无有效片段");
+  return path;
+}
+
+/**
+ * 解析版本字段路径为片段序列。支持:
+ *   releases.0.version                      对象键 / 数组索引
+ *   releases-index[channel-version=10.0].latest-release
+ *                                           数组过滤:先取该键,再按字段匹配首个元素
+ */
+function parsePathSegments(path) {
+  const segs = [];
+  let buf = "";
+  let i = 0;
+  const flushKey = () => {
+    const s = buf.trim();
+    buf = "";
+    if (!s) return;
+    if (/^\d+$/.test(s)) segs.push({ type: "index", index: Number(s) });
+    else segs.push({ type: "key", name: s });
+  };
+  while (i < path.length) {
+    const ch = path[i];
+    if (ch === ".") {
+      flushKey();
+      i++;
+      continue;
+    }
+    if (ch === "[") {
+      const namePart = buf.trim();
+      buf = "";
+      const end = path.indexOf("]", i);
+      if (end === -1) throw new ApiError("版本字段路径语法错误:方括号未闭合");
+      const inner = path.slice(i + 1, end);
+      const eq = inner.indexOf("=");
+      if (eq === -1) throw new ApiError("版本字段路径语法错误:方括号内应写成 字段=值");
+      segs.push({
+        type: "filter",
+        name: namePart || undefined,
+        field: inner.slice(0, eq).trim(),
+        value: inner.slice(eq + 1).trim(),
+      });
+      i = end + 1;
+      if (path[i] === ".") i++;
+      continue;
+    }
+    buf += ch;
+    i++;
+  }
+  flushKey();
+  return segs;
+}
+
+/** 按片段序列从 JSON 中取值;任一步缺失返回 undefined */
+function pickByJsonPath(root, path) {
+  let cur = root;
+  for (const seg of parsePathSegments(path)) {
+    if (cur === null || cur === undefined) return undefined;
+    if (seg.type === "index") {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur[seg.index];
+    } else if (seg.type === "key") {
+      cur = cur[seg.name];
+    } else {
+      if (seg.name !== undefined) cur = cur[seg.name];
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur.find((it) => it && String(it[seg.field]) === seg.value);
+    }
+  }
+  return cur;
+}
+
 /* ─────────────── 字段校验与归一化 ─────────────── */
 
 /**
@@ -217,12 +333,14 @@ function normalizeApp(input, base = {}) {
   if (!name) throw new ApiError("应用名称不能为空");
 
   const channel = input.channel ?? out.channel ?? "manual";
-  if (channel !== "github" && channel !== "chocolatey" && channel !== "winget" && channel !== "manual") {
-    throw new ApiError("版本来源仅支持 github / chocolatey / winget / manual");
+  if (!["github", "chocolatey", "winget", "official", "manual"].includes(channel)) {
+    throw new ApiError("版本来源仅支持 github / chocolatey / winget / official / manual");
   }
 
   let repo = String(input.repo ?? out.repo ?? "").trim();
   let packageId = String(input.packageId ?? out.packageId ?? "").trim();
+  let officialUrl = String(input.officialUrl ?? out.officialUrl ?? "").trim();
+  let jsonPath = String(input.jsonPath ?? out.jsonPath ?? "").trim();
 
   if (channel === "github") {
     // 允许直接粘贴仓库主页或 .git 链接
@@ -232,6 +350,8 @@ function normalizeApp(input, base = {}) {
       .replace(/\/+$/, "");
     if (!REPO_RE.test(repo)) throw new ApiError("GitHub 仓库格式应为 owner/repo");
     packageId = "";
+    officialUrl = "";
+    jsonPath = "";
   } else if (channel === "chocolatey") {
     // 允许直接粘贴包页面链接
     packageId = packageId
@@ -239,20 +359,33 @@ function normalizeApp(input, base = {}) {
       .replace(/\/+$/, "");
     if (!CHOCO_ID_RE.test(packageId)) throw new ApiError("Chocolatey 包 ID 格式不正确,如 vlc");
     repo = "";
+    officialUrl = "";
+    jsonPath = "";
   } else if (channel === "winget") {
     if (!WINGET_ID_RE.test(packageId)) {
       throw new ApiError("winget 包 ID 应为 发布者.包名,如 VideoLAN.VLC");
     }
     repo = "";
+    officialUrl = "";
+    jsonPath = "";
+  } else if (channel === "official") {
+    officialUrl = validateOfficialUrl(officialUrl);
+    jsonPath = validateJsonPath(jsonPath);
+    repo = "";
+    packageId = "";
   } else {
     repo = "";
     packageId = "";
+    officialUrl = "";
+    jsonPath = "";
   }
 
   out.name = name;
   out.channel = channel;
   out.repo = repo;
   out.packageId = packageId;
+  out.officialUrl = officialUrl;
+  out.jsonPath = jsonPath;
   if (input.version !== undefined) out.version = String(input.version).trim();
   if (input.note !== undefined) out.note = String(input.note).trim();
   // 推送通知默认关闭:需在表单中主动勾选才会纳入定时检查与推送
@@ -446,11 +579,65 @@ async function fetchWingetLatest(packageId, env) {
   };
 }
 
+/**
+ * 官方自查:直接请求厂商公开的版本 API/JSON,按字段路径取值。
+ * 适用于 Chrome(Google 版本发布 API)、.NET(release-metadata)等
+ * 提供结构化版本数据、但没有标准 Release 接口的应用。
+ */
+async function fetchOfficialLatest(app) {
+  const url = app.officialUrl;
+  if (!url || !app.jsonPath) throw new ApiError("官方自查配置不完整,请编辑应用填写 API 地址与字段路径");
+
+  let res;
+  try {
+    res = await fetchWithRetry(url, { headers: OFFICIAL_HEADERS });
+  } catch (e) {
+    if (e instanceof ApiError) throw new ApiError(`官方 API 请求失败:${e.message}`, 502);
+    throw e;
+  }
+  if (res.status === 404) throw new ApiError("官方 API 返回 404,请检查地址是否正确", 404);
+  if (res.status === 403) throw new ApiError("官方 API 拒绝访问(HTTP 403),可能限流或需鉴权", 403);
+  if (!res.ok) throw new ApiError(`官方 API 请求失败(HTTP ${res.status})`, 502);
+
+  const len = Number(res.headers.get("content-length") || 0);
+  if (len > OFFICIAL_MAX_BYTES) {
+    throw new ApiError(
+      `官方 API 响应过大(${(len / 1048576).toFixed(1)} MB),请改用支持分页/精简的地址(如追加 pageSize=1)`,
+      502
+    );
+  }
+
+  const text = await res.text();
+  if (text.length > OFFICIAL_MAX_BYTES) {
+    throw new ApiError(
+      `官方 API 响应过大(${(text.length / 1048576).toFixed(1)} MB),请改用支持分页/精简的地址(如追加 pageSize=1)`,
+      502
+    );
+  }
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new ApiError("官方 API 返回的不是 JSON,请检查地址", 502);
+  }
+
+  const raw = pickByJsonPath(data, app.jsonPath);
+  if (raw === undefined || raw === null || raw === "") {
+    throw new ApiError(`按路径「${app.jsonPath}」未找到版本字段,请检查字段路径`, 404);
+  }
+  const version = typeof raw === "object" ? "" : String(raw).trim();
+  if (!version) throw new ApiError(`路径「${app.jsonPath}」取到的不是版本号`, 502);
+
+  return { version, releaseUrl: url, publishedAt: null };
+}
+
 /** 按应用渠道分发查询;manual 渠道不支持自动查询 */
 async function fetchLatest(app, env) {
   if (app.channel === "github" && app.repo) return fetchGitHubLatest(app.repo, env);
   if (app.channel === "chocolatey" && app.packageId) return fetchChocolateyLatest(app.packageId);
   if (app.channel === "winget" && app.packageId) return fetchWingetLatest(app.packageId, env);
+  if (app.channel === "official") return fetchOfficialLatest(app);
   throw new ApiError("手动维护的应用不支持自动查询,请在编辑中更新版本号");
 }
 
@@ -709,7 +896,9 @@ async function handleApi(request, env, pathname) {
       const sourceChanged =
         updated.channel !== prev.channel ||
         (updated.repo || "") !== (prev.repo || "") ||
-        (updated.packageId || "") !== (prev.packageId || "");
+        (updated.packageId || "") !== (prev.packageId || "") ||
+        (updated.officialUrl || "") !== (prev.officialUrl || "") ||
+        (updated.jsonPath || "") !== (prev.jsonPath || "");
       if (sourceChanged || updated.channel === "manual") {
         delete updated.latestVersion;
         delete updated.releaseUrl;
