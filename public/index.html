@@ -6,6 +6,10 @@
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#f4f6fb">
 <title>应用版本检测</title>
+<!-- 站点图标(浏览器标签页):SVG 主图标 + ICO/PNG 兜底 -->
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <!-- 动态背景引擎样式(先引入,便于页面样式覆盖墨色) -->
 <link rel="stylesheet" href="background/engine.css">
 <style>
@@ -44,7 +48,14 @@
     --link-on-canvas: #93c5fd;
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; background: var(--page-bg); color-scheme: light; }
+  html {
+    -webkit-text-size-adjust: 100%;
+    background: var(--page-bg);
+    color-scheme: light;
+    /* 始终为滚动条预留空间:折叠/展开分组导致页面高度变化时,
+       滚动条出现或消失不会再让居中内容左右抖动 */
+    scrollbar-gutter: stable;
+  }
   /* 背景墨色:引擎每帧读取 #bg-stage 的 computed color,切换主题即时生效 */
   #bg-stage { color: var(--bg-ink); }
   /* 薄雾高光层:仅深色主题启用,叠在画布之上、内容之下 */
@@ -59,6 +70,8 @@
   body {
     margin: 0;
     background: transparent;
+    /* clip(而非 hidden)可阻止横向溢出的同时不破坏 sticky 顶栏 */
+    overflow-x: clip;
     color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
     -webkit-tap-highlight-color: transparent;
@@ -172,6 +185,9 @@
   .group-head {
     display: flex; align-items: center; gap: 6px;
     padding: 2px 0;
+    /* 负外边距放在不可聚焦的父元素上(而不是按钮上),
+       这样按钮获得焦点时不会被浏览器横向滚动,也不会撑出滚动条 */
+    margin-left: -8px;
   }
   .group.ungrouped .group-head { opacity: .9; }
   .grp-drag {
@@ -184,8 +200,9 @@
   .grp-toggle {
     display: flex; align-items: center; gap: 10px;
     background: none; border: none;
-    /* 圆角内边距:悬停/点击时出现「选中圆框」高亮(与上一版一致) */
-    padding: 4px 8px; margin-left: -8px; border-radius: 8px;
+    /* 圆角内边距:悬停/点击时出现「选中圆框」高亮(与上一版一致)
+       负外边距已移到父级 .group-head,避免按钮聚焦时产生横向滚动 */
+    padding: 4px 8px; border-radius: 8px;
     color: var(--text); font: inherit; font-weight: 600; font-size: 15px;
     cursor: pointer; text-align: left; min-width: 0;
     transition: background .15s, transform .06s;
