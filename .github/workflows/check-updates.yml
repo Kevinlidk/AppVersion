@@ -4,7 +4,7 @@
 # 因此改由 GitHub 的定时任务通过 HTTP 触发 Worker 的 /api/check。
 #
 # 需要配置的仓库密钥(Settings → Secrets and variables → Actions):
-#   APP_VERSION_URL   Worker 线上地址,如 https://app-version.kevinlidk.cn
+#   APP_VERSION_URL   Worker 线上地址,如 https://appversion.kevinlidk.cn
 #   CRON_SECRET       与 Worker 端 `wrangler secret put CRON_SECRET` 相同的值
 #
 # 注意:GitHub 的 schedule 使用 UTC 时间,且在高峰期可能延迟数分钟到数十分钟;
@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "${APP_VERSION_URL:-}" ]; then
-            echo "::error::缺少仓库密钥 APP_VERSION_URL(如 https://app-version.kevinlidk.cn)"
+            echo "::error::缺少仓库密钥 APP_VERSION_URL(如 https://appversion.kevinlidk.cn)"
             exit 1
           fi
           if [ -z "${CRON_SECRET:-}" ]; then

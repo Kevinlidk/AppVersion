@@ -1,6 +1,6 @@
 # AppVersion · 应用版本检测
 
-> **线上地址:<https://app-version.kevinlidk.cn>**
+> **线上地址:<https://appversion.kevinlidk.cn>**
 
 一个部署在 **Cloudflare Workers** 上的轻量「应用版本检测」Web 解决方案:集中管理你关注的应用,一键查询它们的最新版本,有可用更新时自动推送通知,并对手机端访问做了专门的自适应优化。
 
@@ -88,7 +88,7 @@
 5. **(必配)设置管理员密码** → 见下文「管理员与权限」
 6. **(必配)设置定时检查令牌并在 GitHub 配置 Actions 密钥** → 见下文「定时检查(由 GitHub Actions 驱动)」
 7. (可选)配置更新推送通知 → 见下文「通知推送配置」
-8. (可选)绑定自定义域名:Worker **设置 → 域和路由** 添加 `app-version.kevinlidk.cn`
+8. (可选)绑定自定义域名:Worker **设置 → 域和路由** 添加 `appversion.kevinlidk.cn`
 
 > 未绑定 KV 前访问页面会提示「未绑定 KV 存储」,按第 3~4 步补上即可。
 
@@ -148,7 +148,7 @@ npx wrangler secret put CRON_SECRET
 
 | 名称 | 值 |
 | --- | --- |
-| `APP_VERSION_URL` | Worker 线上地址,如 `https://app-version.kevinlidk.cn` |
+| `APP_VERSION_URL` | Worker 线上地址,如 `https://appversion.kevinlidk.cn` |
 | `CRON_SECRET` | 与第 1 步相同的随机字符串 |
 
 配好后可在 **Actions → Check app updates → Run workflow** 手动跑一次验证;成功时 job summary 会显示检查摘要(检查数 / 更新数 / 推送状态)。
@@ -159,7 +159,7 @@ npx wrangler secret put CRON_SECRET
 - 手动触发(本地调试):
 
 ```bash
-curl -X POST https://app-version.kevinlidk.cn/api/check -H "Authorization: Bearer $CRON_SECRET"
+curl -X POST https://appversion.kevinlidk.cn/api/check -H "Authorization: Bearer $CRON_SECRET"
 ```
 
 > 若日后 Cloudflare cron 名额空出、想改回平台定时任务:取消 `wrangler.toml` 中 `[triggers]` 的注释,并**停用本 workflow**,避免重复检查与重复推送。

@@ -26,7 +26,7 @@ binding = "ASSETS"
 # (Cloudflare 账号的 crons 名额已达上限)。
 #
 # 手动触发一次检查可在本地执行:
-#   curl -X POST https://app-version.kevinlidk.cn/api/check \
+#   curl -X POST https://appversion.kevinlidk.cn/api/check \
 #        -H "Authorization: Bearer $CRON_SECRET"
 #
 # 如日后 Cloudflare cron 名额空出、想改回平台定时任务,
