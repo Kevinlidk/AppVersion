@@ -297,6 +297,32 @@ function validateAppUrl(raw) {
   return u.href;
 }
 
+/** 归一化候选下载列表:校验 https、限长、去重、按分数降序 */
+function normalizeDownloadList(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const list = [];
+  for (const item of raw.slice(0, 30)) {
+    if (!item || typeof item !== "object") continue;
+    const url = String(item.url ?? "").trim();
+    if (!url || seen.has(url)) continue;
+    let u;
+    try { u = new URL(url); } catch { continue; }
+    if (u.protocol !== "https:") continue;
+    seen.add(u.href);
+    const score = Number(item.score);
+    list.push({
+      name: String(item.name ?? "").slice(0, 200) || decodeURIComponent(u.pathname.split("/").pop() || ""),
+      url: u.href,
+      score: Number.isFinite(score) ? score : 0,
+      kind: String(item.kind ?? "").slice(0, 12),
+      arch: String(item.arch ?? "").slice(0, 12),
+    });
+  }
+  list.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return list;
+}
+
 /** 校验「下载地址」:允许 https 链接(可能指向安装包/发布页) */
 function validateDownloadUrl(raw) {
   if (!raw) return "";
@@ -469,6 +495,12 @@ function normalizeApp(input, base = {}) {
   // 最新版本下载地址
   if (input.downloadUrl !== undefined) out.downloadUrl = validateDownloadUrl(String(input.downloadUrl).trim());
   else if (out.downloadUrl === undefined) out.downloadUrl = "";
+  // 可选的候选下载列表(自动检测时生成):[{name,url,score,kind,arch}]
+  if (input.downloads !== undefined) {
+    out.downloads = normalizeDownloadList(input.downloads);
+  } else if (out.downloads === undefined) {
+    out.downloads = [];
+  }
   if (input.version !== undefined) out.version = String(input.version).trim();
   if (input.note !== undefined) out.note = String(input.note).trim();
   // 推送通知默认关闭:需在表单中主动勾选才会纳入定时检查与推送
@@ -734,8 +766,14 @@ async function fetchOfficialLatest(app) {
  * 会跳过签名/校验/调试等非安装文件,并降低 arm / 32 位资产的优先级。
  * @returns {string} 下载地址;没有合适资产时返回 ""
  */
-function pickDownloadAsset(assets) {
-  if (!Array.isArray(assets) || !assets.length) return "";
+/**
+ * 给 GitHub Release 资产打分并降序排列。
+ * 优先级:x64.exe → x64.msi → 其他 exe → 其他 msi → msix → dmg/pkg → deb/rpm/AppImage
+ * 会跳过签名/校验/调试等非安装文件,并对 arm / 32 位资产降级。
+ * @returns {{name:string,url:string,score:number,kind:string,arch:string}[]}
+ */
+function rankDownloadAssets(assets, limit = 30) {
+  if (!Array.isArray(assets) || !assets.length) return [];
 
   const isX64 = (n) => /(?:^|[^a-z0-9])(x64|win64|amd64|x86[_-]64|64[_-]?bit)(?:[^a-z0-9]|$)/.test(n);
   const isArm = (n) => /(?:^|[^a-z0-9])(arm64|aarch64|arm)(?:[^a-z0-9]|$)/.test(n);
@@ -750,8 +788,7 @@ function pickDownloadAsset(assets) {
     return m ? m[1].toLowerCase() : "";
   };
 
-  let best = null;
-  let bestScore = -Infinity;
+  const scored = [];
   for (const asset of assets) {
     const url = asset && asset.browser_download_url;
     if (!url) continue;
@@ -760,24 +797,29 @@ function pickDownloadAsset(assets) {
     if (isJunk(lower)) continue;
 
     const ext = extOf(lower);
-    let score = 0;
-    // 主排序:架构 + 安装包类型
+    let score;
     if (ext === "exe") score = isX64(lower) ? 100 : 80;
     else if (ext === "msi") score = isX64(lower) ? 95 : 75;
     else if (ext === "msix") score = 60;
     else if (ext === "dmg" || ext === "pkg") score = 55;
     else if (ext === "deb" || ext === "rpm" || ext === "appimage") score = 50;
     else score = 10; // 其它文件仅作最后兜底
-    // 架构微调:arm 与 32 位降级(而非直接排除,以免某些项目只有这类构建)
+    // 架构微调:arm 与 32 位降级(而非排除,兼容只有单一架构的项目)
     if (isArm(lower)) score -= 60;
     else if (isX86(lower) && !isX64(lower)) score -= 20;
 
-    if (score > bestScore) {
-      bestScore = score;
-      best = url;
-    }
+    const arch = isX64(lower) ? "x64" : isArm(lower) ? "arm" : isX86(lower) ? "x86" : "";
+    scored.push({ name, url, score, kind: ext, arch });
   }
-  return best || "";
+
+  scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return scored.slice(0, limit);
+}
+
+/** 只取排名第一的下载地址;没有合适资产时返回 "" */
+function pickDownloadAsset(assets) {
+  const ranked = rankDownloadAssets(assets, 1);
+  return ranked.length ? ranked[0].url : "";
 }
 
 /** 按应用渠道分发查询;manual 渠道不支持自动查询 */
@@ -1092,26 +1134,28 @@ async function handleApi(request, env, pathname) {
       jsonPath: body.jsonPath,
       version: body.version,
     });
-    const out = { appUrl: "", downloadUrl: "", source: null };
+    const out = { appUrl: "", downloadUrl: "", downloads: [], source: null };
 
     if (draft.channel === "github" && draft.repo) {
       const headers = await ghHeaders(env);
       out.appUrl = "https://github.com/" + draft.repo;
       let res = await fetchWithRetry(`https://api.github.com/repos/${draft.repo}/releases/latest`, { headers });
       if (res.status === 404) {
-        res = await fetchWithRetry(`${base}/releases?per_page=1`, { headers });
+        res = await fetchWithRetry(`https://api.github.com/repos/${draft.repo}/releases?per_page=1`, { headers });
         if (res.ok) {
           const arr = await res.json();
           if (Array.isArray(arr) && arr.length) {
             // 同样按 x64.exe → x64.msi 的优先级挑选资产
-            out.downloadUrl = pickDownloadAsset(arr[0].assets) || arr[0].html_url || "";
+            out.downloads = rankDownloadAssets(arr[0].assets);
+            out.downloadUrl = out.downloads.length ? out.downloads[0].url : (arr[0].html_url || "");
             out.source = "github-release";
           }
         }
       } else if (res.ok) {
         const r = await res.json();
         // 优先选安装包: x64.exe → x64.msi → 其他 exe/msi → 其它平台安装包
-        out.downloadUrl = pickDownloadAsset(r.assets) || r.html_url || "";
+        out.downloads = rankDownloadAssets(r.assets);
+        out.downloadUrl = out.downloads.length ? out.downloads[0].url : (r.html_url || "");
         out.source = "github-release";
       }
     } else if (draft.channel === "winget" && draft.packageId) {

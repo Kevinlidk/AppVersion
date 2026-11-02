@@ -548,6 +548,35 @@ await test("detect-links:下载资产优先级 x64.exe > x64.msi > 其他", asyn
   ghAssets = null;
 });
 
+await test("detect-links:返回按分数排序的候选下载列表", async () => {
+  ghAssets = ["app-x64.msi", "app-x64.exe", "app-arm64.exe", "checksums.txt"];
+  const d = await bodyOf(await call("/api/apps/detect-links", post({ name: "T", channel: "github", repo: "foo/bar" })));
+  assertEq(d.downloads.length, 3, "候选数(跳过 checksums)");
+  assertEq(d.downloads.map((x) => x.name), ["app-x64.exe", "app-x64.msi", "app-arm64.exe"], "按分数降序");
+  assertEq(d.downloads[0].kind, "exe", "类型");
+  assertEq(d.downloads[0].arch, "x64", "架构");
+  assertEq(d.downloads[2].arch, "arm", "arm 架构");
+  assertEq(d.downloadUrl, d.downloads[0].url, "首选应为列表第一个");
+  ghAssets = null;
+});
+
+await test("downloads 字段:保存候选列表、校验 https、排序与去重", async () => {
+  const app = await bodyOf(await call("/api/apps", post({
+    name: "多候选", channel: "manual", version: "1.0",
+    downloadUrl: "https://e.com/b.msi",
+    downloads: [
+      { name: "b.msi", url: "https://e.com/b.msi", score: 95, kind: "msi", arch: "x64" },
+      { name: "a.exe", url: "https://e.com/a.exe", score: 100, kind: "exe", arch: "x64" },
+      { name: "bad", url: "http://e.com/c.exe", score: 90 },        // 非 https 应丢弃
+      { name: "dup", url: "https://e.com/a.exe", score: 50 },        // 重复应去重
+    ],
+  })));
+  assertEq(app.downloads.length, 2, "只剩 2 个有效且去重后的候选");
+  assertEq(app.downloads.map((x) => x.name), ["a.exe", "b.msi"], "按分数降序");
+  assertEq(app.downloads[0].url, "https://e.com/a.exe", "地址");
+  await call("/api/apps/" + app.id, { method: "DELETE" });
+});
+
 await test("detect-links:GitHub 渠道返回仓库主页与 Release 下载页", async () => {
   const res = await call("/api/apps/detect-links", post({ name: "Foo Bar", channel: "github", repo: "foo/bar" }));
   assertEq(res.status, 200, "状态码");
