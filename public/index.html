@@ -166,16 +166,14 @@
   .manage .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
 
   /* ── 分组 ── */
-  .group { margin-top: 14px; }
+  .group { margin-top: 18px; }
   .group.collapsed .group-body { display: none; }
+  /* 分组标题:无边框无背景,只留图标 + 名称 */
   .group-head {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px; border-radius: 10px;
-    background: var(--card); border: 1px solid var(--border);
-    box-shadow: var(--shadow);
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 0;
   }
-  .group-head:hover { border-color: var(--accent); }
-  .group.ungrouped .group-head { background: transparent; border-style: dashed; box-shadow: none; }
+  .group.ungrouped .group-head { opacity: .9; }
   .grp-drag {
     cursor: grab; color: var(--on-canvas); font-size: 15px; line-height: 1;
     padding: 0 2px; user-select: none;
@@ -184,14 +182,21 @@
   .group.dragging { opacity: .45; }
   .group.drag-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
   .grp-toggle {
-    display: flex; align-items: center; gap: 8px;
-    background: none; border: none; padding: 4px 6px; border-radius: 8px;
-    color: var(--text); font: inherit; font-weight: 600; font-size: 14px;
+    display: flex; align-items: center; gap: 10px;
+    background: none; border: none; padding: 2px 0;
+    color: var(--text); font: inherit; font-weight: 600; font-size: 15px;
     cursor: pointer; text-align: left; min-width: 0;
   }
+  .grp-toggle:not(.static):hover .grp-caret { color: var(--accent); }
   .grp-toggle.static { cursor: default; }
-  .grp-toggle:not(.static):hover { background: var(--accent-weak); }
-  .grp-caret { color: var(--muted); font-size: 11px; width: 10px; flex-shrink: 0; }
+  /* 折叠箭头:大号人字形,展开朝下、折叠朝右 */
+  .grp-caret {
+    color: var(--muted); flex-shrink: 0;
+    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+    transition: transform .18s ease;
+  }
+  .grp-caret svg { width: 18px; height: 18px; display: block; }
+  .group.collapsed .grp-caret { transform: none; }
   .grp-name { overflow-wrap: anywhere; }
   .grp-count {
     font-size: 12px; font-weight: 600; color: var(--muted);
@@ -750,10 +755,17 @@ function appsInGroup(groupId) {
   return sortByOrder(apps.filter((a) => (a.groupId || null) === groupId));
 }
 
+/** 折叠箭头图标(人字形):展开时朝下,折叠时朝右 */
+function caretSvg(collapsed) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ` +
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"` +
+    (collapsed ? "" : ' style="transform:rotate(90deg)"') +
+    `><polyline points="9 6 15 12 9 18"/></svg>`;
+}
+
 /** 分组分区 HTML */
 function groupSectionHtml(group, list, shownIds) {
-  const gid = group ? group.id : "__ungrouped__";
-  const collapsed = group ? group.collapsed === true : false;
+  const collapsed = group ? isGroupCollapsed(group.id) : false;
   const visible = list.filter((a) => shownIds.has(a.id));
   // 非编辑模式:该组没有匹配项就整组隐藏;编辑模式保留空组便于往里拖卡片
   if (!visible.length && !editMode) return "";
@@ -761,18 +773,18 @@ function groupSectionHtml(group, list, shownIds) {
   const count = list.length;
   const updateCount = list.filter((a) => statusOf(a) === "update").length;
   const title = group ? esc(group.name) : "未分组";
+  const stats = `<span class="grp-count">${count}</span>` +
+    (updateCount ? `<span class="grp-updates">${updateCount} 个待更新</span>` : "");
   const headerInner = group
     ? `<button type="button" class="grp-toggle" data-gid="${group.id}" aria-expanded="${!collapsed}" title="${collapsed ? "展开" : "折叠"}">
-         <span class="grp-caret" aria-hidden="true">${collapsed ? "▸" : "▾"}</span>
+         <span class="grp-caret">${caretSvg(collapsed)}</span>
          <span class="grp-name">${title}</span>
-         <span class="grp-count">${count}</span>
-         ${updateCount ? `<span class="grp-updates">${updateCount} 个待更新</span>` : ""}
+         ${stats}
        </button>`
     : `<span class="grp-toggle static">
-         <span class="grp-caret" aria-hidden="true">▾</span>
+         <span class="grp-caret">${caretSvg(false)}</span>
          <span class="grp-name">${title}</span>
-         <span class="grp-count">${count}</span>
-         ${updateCount ? `<span class="grp-updates">${updateCount} 个待更新</span>` : ""}
+         ${stats}
        </span>`;
   const groupActions = (editMode && group)
     ? `<span class="grp-actions">
@@ -1181,10 +1193,35 @@ $("#themeToggle").addEventListener("click", () => {
 
 /* ── 分组与布局 ── */
 
+/** 折叠状态:纯客户端(localStorage),每个访问者各自独立,互不影响 */
+const COLLAPSE_KEY = "av_collapsed";
+
+function readCollapsed() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+let collapsedGroups = readCollapsed();
+
+function isGroupCollapsed(groupId) {
+  return collapsedGroups[groupId] === true;
+}
+
+function setGroupCollapsed(groupId, collapsed) {
+  if (collapsed) collapsedGroups[groupId] = true;
+  else delete collapsedGroups[groupId];
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsedGroups)); } catch { /* 隐私模式忽略 */ }
+}
+
 /** 保存布局:分组顺序 + 每个应用的归属与组内顺序(整表提交) */
 async function saveLayout() {
   const payload = {
-    groups: sortByOrder(groups).map((g) => ({ id: g.id, order: g.order, collapsed: g.collapsed === true })),
+    // 折叠状态是客户端个人的,不提交到服务端
+    groups: sortByOrder(groups).map((g) => ({ id: g.id, order: g.order })),
     apps: apps.map((a) => ({ id: a.id, groupId: a.groupId || null, order: Number(a.order) || 0 })),
   };
   await api("/api/layout", { method: "PUT", body: payload });
@@ -1227,19 +1264,10 @@ async function moveGroup(groupId, delta) {
   render();
 }
 
-/** 折叠/展开分组(存到服务端,所有人共享) */
-async function toggleGroup(groupId) {
-  const g = groups.find((x) => x.id === groupId);
-  if (!g) return;
-  g.collapsed = !g.collapsed;
+/** 折叠/展开分组:只写本地,不请求服务端,任何人(含访客)都可操作 */
+function toggleGroup(groupId) {
+  setGroupCollapsed(groupId, !isGroupCollapsed(groupId));
   render();
-  try {
-    await api("/api/groups/" + groupId, { method: "PUT", body: { collapsed: g.collapsed } });
-  } catch (e) {
-    toast(e.message, "error");
-    g.collapsed = !g.collapsed;
-    render();
-  }
 }
 
 async function createGroup() {

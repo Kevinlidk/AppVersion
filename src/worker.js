@@ -1075,7 +1075,7 @@ async function handleApi(request, env, pathname) {
       id: crypto.randomUUID(),
       name: normalizeGroupName(body.name),
       order: nextOrder(groups),
-      collapsed: false,
+      collapsed: false, // 兼容字段,实际折叠状态存于各客户端本地
       createdAt: nowIso(),
     };
     groups.push(group);
@@ -1093,6 +1093,8 @@ async function handleApi(request, env, pathname) {
     if (method === "PUT") {
       const body = await readJson(request);
       if (body.name !== undefined) groups[idx].name = normalizeGroupName(body.name);
+      // collapsed 仅作历史兼容保留:折叠状态已改为各客户端本地保存(localStorage),
+      // 不再由服务端作为权威来源,前端也不会读取该值。
       if (body.collapsed !== undefined) groups[idx].collapsed = Boolean(body.collapsed);
       if (body.order !== undefined) {
         const n = Number(body.order);

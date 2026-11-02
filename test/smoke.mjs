@@ -503,9 +503,8 @@ await test("分组:创建/重命名/删除,删除后组内应用回到未分组"
   assertEq((await call("/api/groups", post({ name: "   " }))).status, 400, "空名称拒绝");
   assertEq((await call("/api/groups", post({ name: "x".repeat(41) }))).status, 400, "超长拒绝");
 
-  const renamed = await bodyOf(await call("/api/groups/" + g1.id, put({ name: "网页浏览器", collapsed: true })));
+  const renamed = await bodyOf(await call("/api/groups/" + g1.id, put({ name: "网页浏览器" })));
   assertEq(renamed.name, "网页浏览器", "重命名");
-  assertEq(renamed.collapsed, true, "折叠状态");
 
   // 把应用放进 g2 后删除 g2
   const app = await bodyOf(await call("/api/apps", post({ name: "组内应用", channel: "manual", groupId: g2.id })));
