@@ -30,10 +30,12 @@
 
 ```
 ├── src/worker.js        # Worker:REST API、多渠道版本查询、检查与通知推送
+├── scripts/
+│   └── build-config.mjs # 部署前注入 KV_NAMESPACE_ID,生成 wrangler.generated.toml
 ├── public/index.html    # 前端单页(Workers Static Assets 承载)
 ├── public/background/   # GlyphWind 动态背景套件(WebGL2,装饰性)
 ├── .github/workflows/   # check-updates.yml:定时触发 /api/check
-├── wrangler.toml        # Cloudflare Workers 配置(assets / KV)
+├── wrangler.toml        # Cloudflare Workers 基础配置(assets / 说明)
 ├── package.json
 └── test/
     ├── smoke.mjs        # API + 通知推送冒烟测试(离线)
@@ -49,9 +51,11 @@
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers 和 Pages** → **创建** → 选择「**导入一个 Git 仓库**」,授权并选择本仓库(`Kevinlidk/AppVersion`)
 2. 构建配置保持默认(会自动执行 `npx wrangler deploy`)并部署
-3. 创建 KV 命名空间:左侧 **存储和数据库 → KV** → 创建命名空间(如 `app-version`),点进去复制命名空间 **ID**
-4. **把 ID 填进 `wrangler.toml` 的 `[[kv_namespaces]]`**(替换 `REPLACE_WITH_YOUR_KV_NAMESPACE_ID`)后提交推送
-   > ⚠️ 不要只在 Dashboard「设置 → 绑定」里加。本项目通过 Git 集成部署,每次部署会以 `wrangler.toml` 为准重建 Worker 配置,**只存在于 Dashboard 的绑定会在下次部署时被清掉**(页面报"未绑定 KV 存储"就是这个原因)。
+3. 创建 KV 命名空间:左侧 **存储和数据库 → KV** → 创建命名空间(如 `app-version`),点进去复制命名空间 **ID**(32 位十六进制)
+4. **配置 KV 命名空间 ID(通过环境变量,不用改代码)**
+   - Cloudflare 侧:**Worker → 设置 → 构建 → 变量和密钥**,添加 `KV_NAMESPACE_ID` = 你的命名空间 ID
+   - 同时把 **部署命令(Deploy command)** 改为 `npm run deploy`
+   - 原理:`wrangler.toml` 不支持 `${VAR}` 插值,所以部署前由 `scripts/build-config.mjs` 读取该环境变量,生成带绑定的 `wrangler.generated.toml` 再部署——**每次重新部署都会自动重建绑定**,不会像手工 Dashboard 绑定那样被覆盖丢失
 5. **(必配)设置管理员密码** → 见下文「管理员与权限」
 6. **(必配)设置定时检查令牌并在 GitHub 配置 Actions 密钥** → 见下文「定时检查(由 GitHub Actions 驱动)」
 7. (可选)配置更新推送通知 → 见下文「通知推送配置」
@@ -64,10 +68,22 @@
 ```bash
 npm install
 npx wrangler login
-npx wrangler kv namespace create APP_KV
-# 把命令输出的 id 填入 wrangler.toml,并取消 [[kv_namespaces]] 三行注释
-npx wrangler deploy
 ```
+
+在项目根目录创建 `.dev.vars`(已 gitignore),写入命名空间 ID:
+
+```ini
+KV_NAMESPACE_ID=你的32位命名空间ID
+```
+
+然后:
+
+```bash
+npm run deploy   # 自动注入 KV 绑定并部署
+npm run dev      # 本地开发(同样先注入)
+```
+
+> 首次需要创建命名空间:`npx wrangler kv namespace create APP_KV`,命令会输出 ID。
 
 ## 管理员与权限
 
@@ -127,7 +143,7 @@ curl -X POST https://app-version.kevinlidk.cn/api/check -H "Authorization: Beare
 
 | 环境变量 | 必配 | 说明 |
 | --- | --- | --- |
-| `APP_KV`(KV 绑定) | ✅ | 应用列表存储。**必须写在 `wrangler.toml` 中**,否则每次部署会丢失 |
+| `APP_KV`(KV 绑定) | ✅ | 应用列表存储。由环境变量 `KV_NAMESPACE_ID` 在部署前注入,无需手改配置 |
 | `ADMIN_PASSWORD` | ✅ | 管理员密码,编辑类接口的登录凭据(见「管理员与权限」) |
 | `CRON_SECRET` | ✅ | GitHub Actions 触发 `/api/check` 的令牌(见上一节) |
 | `GITHUB_TOKEN` | 推荐 | 提升 GitHub API 速率限制(GitHub 渠道与 winget 渠道共用) |
@@ -150,7 +166,7 @@ npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
 
 ```bash
 npm install
-npm run dev      # wrangler dev,地址 http://localhost:8787(需先配置 KV)
+npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
 npm test         # API + 定时推送冒烟测试(离线)

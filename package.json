@@ -5,9 +5,10 @@
   "type": "module",
   "description": "应用版本检测 —— 实时管理和查询所关注应用的最新版本,部署于 Cloudflare Workers",
   "scripts": {
-    "dev": "wrangler dev",
+    "config": "node scripts/build-config.mjs",
+    "dev": "node scripts/build-config.mjs && wrangler dev -c wrangler.generated.toml",
+    "deploy": "node scripts/build-config.mjs && wrangler deploy -c wrangler.generated.toml",
     "serve": "node test/dev-server.mjs",
-    "deploy": "wrangler deploy",
     "test": "node test/smoke.mjs"
   },
   "devDependencies": {

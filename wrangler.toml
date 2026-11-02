@@ -1,5 +1,7 @@
 # Cloudflare Workers 配置
-# 部署:Dashboard 导入本仓库后自动构建;或本地执行 `npx wrangler deploy`
+# 部署:本文件是"基础配置",KV 绑定等由部署脚本补充 —— 见文件末尾说明。
+#   npm run deploy   # 生成 wrangler.generated.toml 后部署(推荐)
+#   npm run dev      # 本地开发(同样先注入 KV)
 
 name = "app-version"
 main = "src/worker.js"
@@ -39,26 +41,32 @@ binding = "ASSETS"
 #   npx wrangler secret put CRON_SECRET
 # 未配置时该接口只接受管理员会话,自动化调用会被拒绝。
 
-# ── KV 存储(必配)────────────────────────────────────────
-# ⚠️ 重要:KV 绑定必须写在本文件里,不要只在 Dashboard 手动添加。
-#    因为本项目通过 Git 集成部署(GitHub → Cloudflare Workers Builds),
-#    每次部署都会以本文件为准重建 Worker 配置,只存在于 Dashboard 的
-#    绑定会在下一次部署时被清掉(表现为页面提示"未绑定 KV 存储")。
+# ── KV 存储(必配,ID 由环境变量注入)─────────────────────
+# KV 绑定不是普通环境变量:wrangler.toml 不支持 ${VAR} 插值,id 必须是字面量。
+# 因此本项目把 ID 放在环境变量里,由部署脚本在部署前注入:
 #
-# ▶ 填写步骤:
-#   1. Cloudflare Dashboard →「存储和数据库」→「KV」
-#      找到本项目的命名空间,点进去复制页面顶部的 ID
-#      (32 位十六进制,形如 a1b2c3d4e5f67890a1b2c3d4e5f67890)
-#   2. 把下面 REPLACE_WITH_YOUR_KV_NAMESPACE_ID 替换成该 ID
-#   3. 提交推送 → 等待 Cloudflare 重新部署,绑定会自动重建
+#   scripts/build-config.mjs 读取 KV_NAMESPACE_ID
+#     → 生成 wrangler.generated.toml(已 gitignore)
+#     → 再用它执行 wrangler deploy
 #
-# 若还没创建过命名空间:
+# 所以本文件【不要】再写 [[kv_namespaces]],否则会和生成配置重复。
+#
+# ▶ Cloudflare Workers Builds(当前部署方式)
+#   设置 → 构建:
+#     · 部署命令(Deploy command)改为:npm run deploy
+#     · 变量和密钥 → 添加 KV_NAMESPACE_ID = <32 位命名空间 ID>
+#   获取 ID:Dashboard →「存储和数据库」→「KV」→ 点开命名空间,复制顶部 ID
+#
+# ▶ 本地开发
+#   项目根目录 .dev.vars 写入:KV_NAMESPACE_ID=<32 位命名空间 ID>
+#   然后 npm run dev / npm run deploy 即可
+#
+# ▶ 还没创建过命名空间
 #   npx wrangler kv namespace create APP_KV
-# 或在 Dashboard「存储和数据库 → KV」点「创建」,然后把 ID 填到下面。
+#   或 Dashboard「存储和数据库 → KV」点「创建」,再复制 ID
 
-[[kv_namespaces]]
-binding = "APP_KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+# ── 其它说明 ─────────────────────────────────────────────
+# 本地纯静态预览(不需要 KV):npm run serve
 
 [observability]
 enabled = true
