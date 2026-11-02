@@ -797,8 +797,14 @@ $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
   var stage = document.getElementById("bg-stage");
   if (!stage) return;
 
-  // URL 可选参数:?seed=123&look=mixed|lettered|figured
+  // 引擎内置 180 秒省电预算:到期后画面永久定格。
+  // 装饰背景需要一直滚动,故调大预算并由下面的保活定时器续期。
+  var KEEPALIVE_MS = 30 * 60 * 1000;
+
+  // URL 可选参数:?seed=123&look=mixed|lettered|figured&motion=off
   var params = new URLSearchParams(location.search);
+  if (params.get("motion") === "off") return; // 显式关闭动画,仅保留静态底色
+
   var looks = { mixed: 1, lettered: 1, figured: 1 };
   var look = looks[params.get("look")] ? params.get("look") : "mixed";
   var seedRaw = Number(params.get("seed"));
@@ -809,21 +815,36 @@ $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
     look: look,
     interactive: false // 装饰性:不绑定指针/键盘监听,不拦截任何点击
   });
+  settings.power.budgetS = 86400; // 24 小时预算(默认 180 秒会让背景 3 分钟后定格)
 
+  // 系统开启"减少动态效果"时不停止动画,而是降为柔和模式:风速与亮度明显降低
+  var reduce = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) {
+    settings.wind.energy = 0.35;
+    settings.strength.scale = 0.7;
+  }
+
+  var keepAlive = null;
   var instance = GlyphWind.create({
     element: stage,
     settings: function () { return settings; },
     timing: function () { return { fadeIn: 3000, fadeOut: 500 }; },
     onReady: function () {
-      // 尊重系统"减少动态效果"偏好:偏好时不启动动画,仅保留静态画面
-      var reduce = window.matchMedia &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (!reduce) instance.setRunning(true);
+      instance.setRunning(true);
+      // 定期续期,避免长时间挂机后 settle 到静止
+      keepAlive = setInterval(function () {
+        try { instance.refresh(); } catch (e) { /* 忽略 */ }
+      }, KEEPALIVE_MS);
     },
     onError: function (err) {
       console.error("背景引擎错误:", err);
       stage.style.display = "none"; // 优雅回退到纯底色
     }
+  });
+
+  window.addEventListener("pagehide", function () {
+    if (keepAlive) clearInterval(keepAlive);
   });
 })();
 </script>
