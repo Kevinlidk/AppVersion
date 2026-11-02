@@ -165,12 +165,79 @@
   .manage { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
   .manage .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
 
-  /* ── 应用卡片 ── */
-  .list { display: grid; gap: 12px; margin-top: 12px; }
-  /* 自适应列数:每张卡片至少 320px,能放几张放几张,放不下自动换到下一行 */
-  @media (min-width: 640px) {
-    .list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  /* ── 分组 ── */
+  .group { margin-top: 14px; }
+  .group.collapsed .group-body { display: none; }
+  .group-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-radius: 10px;
+    background: var(--card); border: 1px solid var(--border);
+    box-shadow: var(--shadow);
   }
+  .group-head:hover { border-color: var(--accent); }
+  .group.ungrouped .group-head { background: transparent; border-style: dashed; box-shadow: none; }
+  .grp-drag {
+    cursor: grab; color: var(--on-canvas); font-size: 15px; line-height: 1;
+    padding: 0 2px; user-select: none;
+  }
+  .grp-drag[hidden] { display: none; }
+  .group.dragging { opacity: .45; }
+  .group.drag-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
+  .grp-toggle {
+    display: flex; align-items: center; gap: 8px;
+    background: none; border: none; padding: 4px 6px; border-radius: 8px;
+    color: var(--text); font: inherit; font-weight: 600; font-size: 14px;
+    cursor: pointer; text-align: left; min-width: 0;
+  }
+  .grp-toggle.static { cursor: default; }
+  .grp-toggle:not(.static):hover { background: var(--accent-weak); }
+  .grp-caret { color: var(--muted); font-size: 11px; width: 10px; flex-shrink: 0; }
+  .grp-name { overflow-wrap: anywhere; }
+  .grp-count {
+    font-size: 12px; font-weight: 600; color: var(--muted);
+    background: var(--accent-weak); border-radius: 999px; padding: 1px 8px; flex-shrink: 0;
+  }
+  .grp-updates {
+    font-size: 12px; font-weight: 600; color: var(--warn);
+    background: var(--warn-bg); border-radius: 999px; padding: 1px 8px; flex-shrink: 0;
+  }
+  .grp-actions { display: flex; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+  .btn.tiny { min-height: 30px; padding: 0 9px; font-size: 12.5px; border-radius: 8px; }
+  .group-body {
+    display: grid; gap: 12px; margin-top: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  }
+  @media (max-width: 639px) { .group-body { grid-template-columns: 1fr; } }
+  .group-empty {
+    font-size: 13px; color: var(--on-canvas); margin: 4px 0;
+    padding: 14px; border: 1px dashed var(--border); border-radius: 10px; text-align: center;
+  }
+  .card.dragging { opacity: .45; }
+  .card.drag-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
+  .card.drop-hint { outline: 2px dashed var(--accent); outline-offset: 2px; }
+  .card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; align-items: center; }
+  .card-actions .btn { min-height: 34px; padding: 0 11px; font-size: 13px; }
+  .card-actions .btn.tiny { min-height: 34px; padding: 0 9px; font-size: 13px; }
+  .grp-select {
+    min-height: 34px; max-width: 120px; font-size: 13px;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: #f4f6fb; color: var(--text); padding: 0 6px;
+  }
+  .card-order { display: flex; gap: 5px; }
+
+  /* 编辑模式工具条 */
+  .editbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-top: 10px; padding: 10px 12px;
+    background: var(--card); border: 1px dashed var(--accent);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .editbar .hint-inline { font-size: 12.5px; margin: 0 auto 0 0; }
+  .editbar .btn { min-height: 34px; font-size: 13px; }
+
+  /* ── 应用卡片 ── */
+  /* 列表容器装的是「分组」,单个分组占满一行;卡片网格在 .group-body 里 */
+  .list { display: block; margin-top: 12px; }
   .card {
     background: var(--card); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 14px 16px;
@@ -208,8 +275,7 @@
   .meta a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
   .meta a:active { opacity: .7; }
   .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; overflow-wrap: anywhere; }
-  .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .card-actions .btn { min-height: 36px; padding: 0 12px; font-size: 13px; }
+  /* 卡片操作行样式见上方 .card-actions(编辑模式下含分组下拉与上下移按钮) */
 
   /* ── 空状态 ── */
   .empty { text-align: center; color: var(--muted); padding: 56px 16px 32px; }
@@ -325,7 +391,16 @@
   <div id="manageRow" class="manage hidden">
     <button id="exportBtn" class="btn">⬇ 导出配置</button>
     <button id="importBtn" class="btn">⬆ 导入配置</button>
+    <button id="editModeBtn" class="btn">✎ 编辑布局</button>
   </div>
+
+  <div id="editBar" class="editbar hidden">
+    <span class="hint-inline">编辑模式:可拖动卡片/分组排序(手机端用 ↑↓ 与下拉选择)</span>
+    <button id="addGroupBtn" class="btn primary">＋ 新建分组</button>
+    <button id="exitEditBtn" class="btn">完成</button>
+  </div>
+
+  <!-- 列表容器:分组由 render() 动态生成 -->
   <div id="list" class="list"></div>
 
   <div id="emptyState" class="empty hidden">
@@ -370,6 +445,9 @@
     </label>
     <label>备注
       <input name="note" maxlength="100" placeholder="可选">
+    </label>
+    <label>所属分组
+      <select name="groupId" id="groupIdSelect"></select>
     </label>
     <label>图标地址(可选)
       <input name="iconUrl" id="iconUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="留空则自动匹配官方图标,匹配不到用名称缩写">
@@ -425,6 +503,8 @@
 const $ = (s) => document.querySelector(s);
 const listEl = $("#list");
 let apps = [];
+let groups = [];
+let editMode = false;
 let filter = { q: "", channel: "all", updatesOnly: false };
 let editingId = null;
 let isAdmin = false;
@@ -490,6 +570,9 @@ function renderAdminUi() {
   $("#addBtn").classList.toggle("hidden", !isAdmin);
   $("#emptyAddBtn").classList.toggle("hidden", !isAdmin);
   $("#manageRow").classList.toggle("hidden", !isAdmin);
+  if (!isAdmin && editMode) editMode = false;
+  $("#editBar").classList.toggle("hidden", !(isAdmin && editMode));
+  $("#editModeBtn").textContent = editMode ? "✎ 编辑中…" : "✎ 编辑布局";
   render();
 }
 
@@ -622,9 +705,18 @@ function cardHtml(a) {
         ${st === "update" ? '<button class="btn act-marked">已更新</button>' : ""}
         <button class="btn act-edit">编辑</button>
         <button class="btn danger-text act-del">删除</button>
+        ${editMode ? `
+          <select class="grp-select" data-id="${a.id}" title="移动到分组" aria-label="移动到分组">
+            <option value=""${!a.groupId ? " selected" : ""}>未分组</option>
+            ${sortByOrder(groups).map((g) =>
+              `<option value="${g.id}"${a.groupId === g.id ? " selected" : ""}>${esc(g.name)}</option>`
+            ).join("")}
+          </select>
+          <button class="btn tiny act-up" title="上移" aria-label="上移">↑</button>
+          <button class="btn tiny act-down" title="下移" aria-label="下移">↓</button>` : ""}
       </div>` : "";
   return `
-    <article class="card" data-id="${a.id}">
+    <article class="card" data-id="${a.id}"${editMode ? ' draggable="true"' : ""}>
       <div class="card-top">
         <div class="app-head">
           ${iconHtml(a)}
@@ -642,6 +734,78 @@ function cardHtml(a) {
     </article>`;
 }
 
+/** 按 order 排序(缺失时按原顺序) */
+function sortByOrder(list) {
+  return [...list].sort((a, b) => {
+    const ao = Number(a.order);
+    const bo = Number(b.order);
+    const av = Number.isFinite(ao) ? ao : Number.MAX_SAFE_INTEGER;
+    const bv = Number.isFinite(bo) ? bo : Number.MAX_SAFE_INTEGER;
+    return av - bv;
+  });
+}
+
+/** 某个分组下的应用(已排序) */
+function appsInGroup(groupId) {
+  return sortByOrder(apps.filter((a) => (a.groupId || null) === groupId));
+}
+
+/** 分组分区 HTML */
+function groupSectionHtml(group, list, shownIds) {
+  const gid = group ? group.id : "__ungrouped__";
+  const collapsed = group ? group.collapsed === true : false;
+  const visible = list.filter((a) => shownIds.has(a.id));
+  // 非编辑模式:该组没有匹配项就整组隐藏;编辑模式保留空组便于往里拖卡片
+  if (!visible.length && !editMode) return "";
+
+  const count = list.length;
+  const updateCount = list.filter((a) => statusOf(a) === "update").length;
+  const title = group ? esc(group.name) : "未分组";
+  const headerInner = group
+    ? `<button type="button" class="grp-toggle" data-gid="${group.id}" aria-expanded="${!collapsed}" title="${collapsed ? "展开" : "折叠"}">
+         <span class="grp-caret" aria-hidden="true">${collapsed ? "▸" : "▾"}</span>
+         <span class="grp-name">${title}</span>
+         <span class="grp-count">${count}</span>
+         ${updateCount ? `<span class="grp-updates">${updateCount} 个待更新</span>` : ""}
+       </button>`
+    : `<span class="grp-toggle static">
+         <span class="grp-caret" aria-hidden="true">▾</span>
+         <span class="grp-name">${title}</span>
+         <span class="grp-count">${count}</span>
+         ${updateCount ? `<span class="grp-updates">${updateCount} 个待更新</span>` : ""}
+       </span>`;
+  const groupActions = (editMode && group)
+    ? `<span class="grp-actions">
+         <button type="button" class="btn tiny grp-rename" data-gid="${group.id}">重命名</button>
+         <button type="button" class="btn tiny danger-text grp-del" data-gid="${group.id}">删除组</button>
+         <button type="button" class="btn tiny grp-up" data-gid="${group.id}" ${isFirstGroup(group) ? "disabled" : ""} title="上移组">↑</button>
+         <button type="button" class="btn tiny grp-down" data-gid="${group.id}" ${isLastGroup(group) ? "disabled" : ""} title="下移组">↓</button>
+       </span>`
+    : "";
+
+  return `
+    <section class="group${collapsed ? " collapsed" : ""}${group ? "" : " ungrouped"}"
+             data-gid="${group ? group.id : ""}"${group ? ` draggable="${editMode}"` : ""}>
+      <header class="group-head">
+        <span class="grp-drag" ${(group && editMode) ? "" : "hidden"} title="拖动调整组顺序" aria-hidden="true">⠿</span>
+        ${headerInner}
+        ${groupActions}
+      </header>
+      <div class="group-body${collapsed ? " hidden" : ""}">
+        ${visible.map(cardHtml).join("") || '<p class="group-empty">此分组暂无应用</p>'}
+      </div>
+    </section>`;
+}
+
+function isFirstGroup(g) {
+  const sorted = sortByOrder(groups);
+  return sorted.length ? sorted[0].id === g.id : true;
+}
+function isLastGroup(g) {
+  const sorted = sortByOrder(groups);
+  return sorted.length ? sorted[sorted.length - 1].id === g.id : true;
+}
+
 function render() {
   const q = filter.q.trim().toLowerCase();
   const shown = apps.filter((a) => {
@@ -650,6 +814,7 @@ function render() {
     if (!q) return true;
     return [a.name, a.repo, a.packageId, a.officialUrl, a.note].some((v) => (v || "").toLowerCase().includes(q));
   });
+  const shownIds = new Set(shown.map((a) => a.id));
   const updateCount = apps.filter((a) => statusOf(a) === "update").length;
   // 「N 个有更新」做成可点击按钮:点击只看有更新的应用,再次点击取消筛选
   if (!apps.length) {
@@ -664,7 +829,15 @@ function render() {
           updateCount + " 个有更新" + (filter.updatesOnly ? " ✕" : "") + "</button>"
         : "");
   }
-  listEl.innerHTML = shown.map(cardHtml).join("");
+
+  // 分组分区渲染:已有分组(按 order)+ 未分组(有内容时才出现)
+  const knownIds = new Set(groups.map((g) => g.id));
+  const sections = sortByOrder(groups)
+    .map((g) => groupSectionHtml(g, appsInGroup(g.id), shownIds));
+  const ungrouped = apps.filter((a) => !a.groupId || !knownIds.has(a.groupId));
+  sections.push(groupSectionHtml(null, sortByOrder(ungrouped), shownIds));
+
+  listEl.innerHTML = sections.filter(Boolean).join("");
   $("#emptyState").classList.toggle("hidden", apps.length > 0);
   // 有数据但被筛选条件过滤空了,给出提示(否则页面看起来像没有应用)
   $("#noMatchHint").classList.toggle("hidden", !(apps.length > 0 && shown.length === 0));
@@ -672,7 +845,9 @@ function render() {
 
 async function load() {
   try {
-    apps = await api("/api/apps");
+    const [appList, groupList] = await Promise.all([api("/api/apps"), api("/api/groups")]);
+    apps = appList;
+    groups = groupList;
     render();
   } catch (e) {
     listEl.innerHTML = `
@@ -810,6 +985,13 @@ function openDialog(app) {
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
   $("#notifyInput").checked = app ? app.notify === true : false;
+  // 分组下拉:未分组 + 现有分组
+  const sel = $("#groupIdSelect");
+  sel.innerHTML = '<option value="">未分组</option>' +
+    sortByOrder(groups).map((g) =>
+      `<option value="${g.id}">${esc(g.name)}</option>`
+    ).join("");
+  sel.value = app && app.groupId ? app.groupId : "";
   syncChannelUi();
   dlg.showModal();
 }
@@ -828,6 +1010,7 @@ form.addEventListener("submit", async (e) => {
     version: form.version.value.trim(),
     note: form.note.value.trim(),
     iconUrl: $("#iconUrlInput").value.trim(),
+    groupId: $("#groupIdSelect").value || null,
     notify: $("#notifyInput").checked,
   };
   if (ch === "github") payload.repo = source;
@@ -852,6 +1035,9 @@ form.addEventListener("submit", async (e) => {
       toast("已保存");
     } else {
       const created = await api("/api/apps", { method: "POST", body: payload });
+      // 追加到所属分组末尾
+      const siblings = appsInGroup(created.groupId || null);
+      created.order = siblings.length;
       apps.unshift(created);
       toast("已添加,正在查询最新版本…");
       if (created.channel !== "manual") refreshOne(created.id).catch(() => {});
@@ -899,6 +1085,7 @@ loginForm.addEventListener("submit", async (e) => {
 $("#logoutBtn").addEventListener("click", async () => {
   try { await api("/api/logout", { method: "POST" }); } catch { /* 忽略 */ }
   isAdmin = false;
+  setEditMode(false);
   renderAdminUi();
   toast("已退出,当前为只读视图");
 });
@@ -953,11 +1140,10 @@ $("#importForm").addEventListener("submit", async (e) => {
   const btn = $("#importSubmitBtn");
   btn.disabled = true;
   try {
-    const r = await api("/api/apps/import", { method: "POST", body: { apps: records } });
-    toast("已导入 " + r.imported + " 个应用");
+    const r = await api("/api/apps/import", { method: "POST", body: { groups: parsed.groups || [], apps: records } });
+    toast("已导入 " + r.imported + " 个应用" + (r.groups ? "、" + r.groups + " 个分组" : ""));
     importDlg.close();
-    apps = await api("/api/apps");
-    render();
+    await load();
   } catch (err) {
     toast(err.message, "error");
   } finally {
@@ -993,9 +1179,266 @@ $("#themeToggle").addEventListener("click", () => {
   try { localStorage.setItem("av_theme", next); } catch { /* 隐私模式下忽略 */ }
 });
 
+/* ── 分组与布局 ── */
+
+/** 保存布局:分组顺序 + 每个应用的归属与组内顺序(整表提交) */
+async function saveLayout() {
+  const payload = {
+    groups: sortByOrder(groups).map((g) => ({ id: g.id, order: g.order, collapsed: g.collapsed === true })),
+    apps: apps.map((a) => ({ id: a.id, groupId: a.groupId || null, order: Number(a.order) || 0 })),
+  };
+  await api("/api/layout", { method: "PUT", body: payload });
+}
+
+/** 把某个应用在所属组内重排到目标位置 */
+async function moveAppInGroup(appId, targetIndex) {
+  const app = apps.find((a) => a.id === appId);
+  if (!app) return;
+  const siblings = appsInGroup(app.groupId || null).filter((a) => a.id !== appId);
+  const idx = Math.max(0, Math.min(targetIndex, siblings.length));
+  siblings.splice(idx, 0, app);
+  siblings.forEach((a, i) => { a.order = i; });
+  await saveLayout();
+  render();
+}
+
+/** 把应用移动到指定分组(追加到末尾) */
+async function moveAppToGroup(appId, groupId) {
+  const app = apps.find((a) => a.id === appId);
+  if (!app) return;
+  const gid = groupId || null;
+  if ((app.groupId || null) === gid) return;
+  app.groupId = gid;
+  app.order = appsInGroup(gid).filter((a) => a.id !== appId).length;
+  await saveLayout();
+  render();
+}
+
+/** 分组顺序上移/下移 */
+async function moveGroup(groupId, delta) {
+  const sorted = sortByOrder(groups);
+  const i = sorted.findIndex((g) => g.id === groupId);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= sorted.length) return;
+  const [moved] = sorted.splice(i, 1);
+  sorted.splice(j, 0, moved);
+  sorted.forEach((g, k) => { g.order = k; });
+  await saveLayout();
+  render();
+}
+
+/** 折叠/展开分组(存到服务端,所有人共享) */
+async function toggleGroup(groupId) {
+  const g = groups.find((x) => x.id === groupId);
+  if (!g) return;
+  g.collapsed = !g.collapsed;
+  render();
+  try {
+    await api("/api/groups/" + groupId, { method: "PUT", body: { collapsed: g.collapsed } });
+  } catch (e) {
+    toast(e.message, "error");
+    g.collapsed = !g.collapsed;
+    render();
+  }
+}
+
+async function createGroup() {
+  const name = prompt("新分组名称:");
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) { toast("分组名称不能为空", "error"); return; }
+  try {
+    const g = await api("/api/groups", { method: "POST", body: { name: trimmed } });
+    groups.push(g);
+    render();
+    toast("已创建分组「" + g.name + "」");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+async function renameGroup(groupId) {
+  const g = groups.find((x) => x.id === groupId);
+  if (!g) return;
+  const name = prompt("重命名分组:", g.name);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === g.name) return;
+  try {
+    const updated = await api("/api/groups/" + groupId, { method: "PUT", body: { name: trimmed } });
+    Object.assign(g, updated);
+    render();
+    toast("已重命名");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+async function deleteGroup(groupId) {
+  const g = groups.find((x) => x.id === groupId);
+  if (!g) return;
+  const n = appsInGroup(groupId).length;
+  const msg = n
+    ? "删除分组「" + g.name + "」?组内 " + n + " 个应用会移到「未分组」,不会被删除。"
+    : "删除分组「" + g.name + "」?";
+  if (!confirm(msg)) return;
+  try {
+    await api("/api/groups/" + groupId, { method: "DELETE" });
+    groups = groups.filter((x) => x.id !== groupId);
+    apps.forEach((a) => { if (a.groupId === groupId) a.groupId = null; });
+    render();
+    toast("已删除分组");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+function setEditMode(on) {
+  editMode = on && isAdmin;
+  $("#editBar").classList.toggle("hidden", !editMode);
+  $("#editModeBtn").textContent = editMode ? "✎ 编辑中…" : "✎ 编辑布局";
+  render();
+}
+
+/* ── 拖拽(桌面端;移动端用按钮)── */
+
+let dragAppId = null;
+let dragGroupId = null;
+
+function clearDragOver() {
+  document.querySelectorAll(".drag-over, .drop-hint").forEach((el) => el.classList.remove("drag-over", "drop-hint"));
+}
+
+listEl.addEventListener("dragstart", (e) => {
+  if (!editMode) return;
+  const card = e.target.closest(".card");
+  if (card) {
+    dragAppId = card.dataset.id;
+    dragGroupId = null;
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragAppId);
+    return;
+  }
+  const grp = e.target.closest(".group:not(.ungrouped)");
+  if (grp && e.target.closest(".grp-drag, .grp-toggle")) {
+    dragGroupId = grp.dataset.gid;
+    dragAppId = null;
+    grp.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragGroupId);
+  }
+});
+
+listEl.addEventListener("dragend", () => {
+  clearDragOver();
+  document.querySelectorAll(".dragging").forEach((el) => el.classList.remove("dragging"));
+  dragAppId = null;
+  dragGroupId = null;
+});
+
+listEl.addEventListener("dragover", (e) => {
+  if (!editMode) return;
+  if (dragAppId) {
+    const card = e.target.closest(".card");
+    const body = e.target.closest(".group-body");
+    if (card && card.dataset.id !== dragAppId) {
+      e.preventDefault();
+      clearDragOver();
+      card.classList.add("drag-over");
+      return;
+    }
+    if (body) {
+      e.preventDefault();
+      clearDragOver();
+      body.closest(".group").classList.add("drag-over");
+    }
+    return;
+  }
+  if (dragGroupId) {
+    const grp = e.target.closest(".group:not(.ungrouped)");
+    if (grp && grp.dataset.gid !== dragGroupId) {
+      e.preventDefault();
+      clearDragOver();
+      grp.classList.add("drag-over");
+    }
+  }
+});
+
+listEl.addEventListener("drop", async (e) => {
+  if (!editMode) return;
+  e.preventDefault();
+  clearDragOver();
+
+  // 卡片拖放
+  if (dragAppId) {
+    const targetCard = e.target.closest(".card");
+    const targetBody = e.target.closest(".group-body");
+    const targetGroupEl = e.target.closest(".group");
+    try {
+      if (targetCard && targetCard.dataset.id !== dragAppId) {
+        const targetApp = apps.find((a) => a.id === targetCard.dataset.id);
+        const moving = apps.find((a) => a.id === dragAppId);
+        if (targetApp && moving) {
+          const gid = targetApp.groupId || null;
+          const list = appsInGroup(gid).filter((a) => a.id !== dragAppId);
+          const idx = Math.max(0, list.findIndex((a) => a.id === targetApp.id));
+          moving.groupId = gid;
+          list.splice(idx, 0, moving);
+          list.forEach((a, i) => { a.order = i; });
+          await saveLayout();
+        }
+      } else if (targetBody && targetGroupEl) {
+        const gid = targetGroupEl.dataset.gid || null;
+        await moveAppToGroup(dragAppId, gid);
+      }
+    } catch (err) {
+      toast(err.message, "error");
+    }
+    dragAppId = null;
+    render();
+    return;
+  }
+
+  // 分组拖放:把源组插到目标组的位置
+  if (dragGroupId) {
+    const targetGrp = e.target.closest(".group:not(.ungrouped)");
+    const targetId = targetGrp && targetGrp.dataset.gid;
+    if (targetId && targetId !== dragGroupId) {
+      const sorted = sortByOrder(groups);
+      const from = sorted.findIndex((g) => g.id === dragGroupId);
+      const to = sorted.findIndex((g) => g.id === targetId);
+      if (from >= 0 && to >= 0) {
+        const [moved] = sorted.splice(from, 1);
+        sorted.splice(to, 0, moved);
+        sorted.forEach((g, k) => { g.order = k; });
+        try {
+          await saveLayout();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      }
+    }
+    dragGroupId = null;
+    render();
+  }
+});
+
 /* ── 事件绑定 ── */
 
-listEl.addEventListener("click", (e) => {
+listEl.addEventListener("click", async (e) => {
+  // 分组头:折叠 / 重命名 / 删除 / 上下移
+  const toggle = e.target.closest(".grp-toggle:not(.static)");
+  if (toggle) { toggleGroup(toggle.dataset.gid); return; }
+  const renameBtn = e.target.closest(".grp-rename");
+  if (renameBtn) { renameGroup(renameBtn.dataset.gid); return; }
+  const delBtn = e.target.closest(".grp-del");
+  if (delBtn) { deleteGroup(delBtn.dataset.gid); return; }
+  const upBtn = e.target.closest(".grp-up");
+  if (upBtn) { moveGroup(upBtn.dataset.gid, -1); return; }
+  const downBtn = e.target.closest(".grp-down");
+  if (downBtn) { moveGroup(downBtn.dataset.gid, 1); return; }
+
   const btn = e.target.closest("button");
   if (!btn) return;
   const card = btn.closest(".card");
@@ -1005,6 +1448,28 @@ listEl.addEventListener("click", (e) => {
   else if (btn.classList.contains("act-edit")) openDialog(app);
   else if (btn.classList.contains("act-del")) del(app);
   else if (btn.classList.contains("act-marked")) markUpdated(app);
+  else if (btn.classList.contains("act-up")) {
+    const siblings = appsInGroup(app.groupId || null);
+    const i = siblings.findIndex((a) => a.id === app.id);
+    if (i > 0) await moveAppInGroup(app.id, i - 1);
+  } else if (btn.classList.contains("act-down")) {
+    const siblings = appsInGroup(app.groupId || null);
+    const i = siblings.findIndex((a) => a.id === app.id);
+    if (i >= 0 && i < siblings.length - 1) await moveAppInGroup(app.id, i + 1);
+  }
+});
+
+// 卡片上的分组下拉:把应用移到目标分组
+listEl.addEventListener("change", async (e) => {
+  const sel = e.target.closest(".grp-select");
+  if (!sel) return;
+  try {
+    await moveAppToGroup(sel.dataset.id, sel.value || null);
+    toast("已移动到「" + (sel.value ? (groups.find((g) => g.id === sel.value) || {}).name : "未分组") + "」");
+  } catch (err) {
+    toast(err.message, "error");
+    render();
+  }
 });
 
 $("#searchInput").addEventListener("input", (e) => { filter.q = e.target.value; render(); });
@@ -1037,6 +1502,9 @@ $("#channelChips").addEventListener("click", (e) => {
 $("#refreshAllBtn").addEventListener("click", refreshAll);
 $("#addBtn").addEventListener("click", () => openDialog(null));
 $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
+$("#editModeBtn").addEventListener("click", () => setEditMode(!editMode));
+$("#exitEditBtn").addEventListener("click", () => setEditMode(false));
+$("#addGroupBtn").addEventListener("click", createGroup);
 
 (async () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");

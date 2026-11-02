@@ -488,6 +488,103 @@ await test("PUT 不存在的 id 返回 404", async () => {
   assertEq(res.status, 404, "状态码");
 });
 
+/* ── 分组与布局 ── */
+
+await test("分组:创建/重命名/删除,删除后组内应用回到未分组", async () => {
+  const g1 = await bodyOf(await call("/api/groups", post({ name: "  浏览器  " })));
+  assertEq(g1.name, "浏览器", "名称去空白");
+  assertEq(g1.order, 0, "首个分组 order");
+  assertEq(g1.collapsed, false, "默认展开");
+
+  const g2 = await bodyOf(await call("/api/groups", post({ name: "开发工具" })));
+  assertEq(g2.order, 1, "order 递增");
+
+  assertEq(await bodyOf(await call("/api/groups")), [g1, g2].map(x => ({ ...x, order: x.order })), "列表");
+  assertEq((await call("/api/groups", post({ name: "   " }))).status, 400, "空名称拒绝");
+  assertEq((await call("/api/groups", post({ name: "x".repeat(41) }))).status, 400, "超长拒绝");
+
+  const renamed = await bodyOf(await call("/api/groups/" + g1.id, put({ name: "网页浏览器", collapsed: true })));
+  assertEq(renamed.name, "网页浏览器", "重命名");
+  assertEq(renamed.collapsed, true, "折叠状态");
+
+  // 把应用放进 g2 后删除 g2
+  const app = await bodyOf(await call("/api/apps", post({ name: "组内应用", channel: "manual", groupId: g2.id })));
+  const del = await bodyOf(await call("/api/groups/" + g2.id, { method: "DELETE" }));
+  assertEq(del.movedApps, 1, "移出应用数");
+  const after = (await bodyOf(await call("/api/apps"))).find((a) => a.id === app.id);
+  assertEq(after.groupId, null, "应用回到未分组");
+  await call("/api/apps/" + app.id, { method: "DELETE" });
+  await call("/api/groups/" + g1.id, { method: "DELETE" });
+});
+
+await test("布局:一次性保存分组顺序与卡片归属/顺序,非法分组引用被清洗", async () => {
+  const ga = await bodyOf(await call("/api/groups", post({ name: "A 组" })));
+  const gb = await bodyOf(await call("/api/groups", post({ name: "B 组" })));
+  const a1 = await bodyOf(await call("/api/apps", post({ name: "卡片1", channel: "manual" })));
+  const a2 = await bodyOf(await call("/api/apps", post({ name: "卡片2", channel: "manual" })));
+
+  const res = await call("/api/layout", put({
+    groups: [{ id: gb.id }, { id: ga.id }],            // 反转分组顺序
+    apps: [
+      { id: a1.id, groupId: ga.id, order: 0 },
+      { id: a2.id, groupId: "not-exist-id", order: 5 }, // 非法分组应被清洗为 null
+    ],
+  }));
+  assertEq(res.status, 200, "状态码");
+
+  const groups = await bodyOf(await call("/api/groups"));
+  // 接口按存储顺序返回,排序由前端按 order 处理;这里校验 order 值
+  const gbNow = groups.find((x) => x.id === gb.id);
+  const gaNow = groups.find((x) => x.id === ga.id);
+  assertEq(gbNow.order, 0, "gb 排到第一");
+  assertEq(gaNow.order, 1, "ga 排到第二");
+
+  const apps = await bodyOf(await call("/api/apps"));
+  const got1 = apps.find((x) => x.id === a1.id);
+  const got2 = apps.find((x) => x.id === a2.id);
+  assertEq(got1.groupId, ga.id, "a1 归组");
+  assertEq(got1.order, 0, "a1 顺序");
+  assertEq(got2.groupId, null, "非法分组被清洗");
+  await call("/api/apps/" + a1.id, { method: "DELETE" });
+  await call("/api/apps/" + a2.id, { method: "DELETE" });
+  await call("/api/groups/" + ga.id, { method: "DELETE" });
+  await call("/api/groups/" + gb.id, { method: "DELETE" });
+});
+
+await test("分组与布局接口未登录一律 401", async () => {
+  const anon = (p, o) => worker.fetch(new Request("http://localhost" + p, o), env, ctx);
+  assertEq((await anon("/api/groups", post({ name: "x" }))).status, 401, "创建组");
+  assertEq((await anon("/api/groups/abc", put({ name: "x" }))).status, 401, "改组");
+  assertEq((await anon("/api/groups/abc", { method: "DELETE" })).status, 401, "删组");
+  assertEq((await anon("/api/layout", put({ groups: [], apps: [] }))).status, 401, "布局");
+  assertEq((await anon("/api/groups")).status, 200, "查看组公开");
+});
+
+await test("导出/导入包含分组:备份可完整还原", async () => {
+  // 清空既有分组,保证断言基数确定
+  for (const x of await bodyOf(await call("/api/groups"))) {
+    await call("/api/groups/" + x.id, { method: "DELETE" });
+  }
+  const g = await bodyOf(await call("/api/groups", post({ name: "备份组" })));
+  const a = await bodyOf(await call("/api/apps", post({ name: "备份卡片", channel: "manual", groupId: g.id })));
+
+  const backup = await bodyOf(await call("/api/apps/export"));
+  assertEq(backup.version, 2, "备份版本");
+  assertEq(backup.groupCount, 1, "分组数");
+  assertEq(backup.groups[0].name, "备份组", "分组名");
+
+  const imp = await bodyOf(await call("/api/apps/import", post(backup)));
+  assertEq(imp.groups, 1, "导入分组数");
+  assertEq(imp.imported, backup.count, "导入应用数应与备份一致");
+
+  const apps = await bodyOf(await call("/api/apps"));
+  const restored = apps.find((x) => x.id === a.id);
+  assertEq(restored.groupId, g.id, "分组关联保留");
+  assertEq(apps.length, backup.count, "导入后应用总数");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+  await call("/api/groups/" + g.id, { method: "DELETE" });
+});
+
 await test("DELETE 删除应用成功", async () => {
   const list = await bodyOf(await call("/api/apps"));
   const target = list.find((a) => a.name === "VLC (winget)");

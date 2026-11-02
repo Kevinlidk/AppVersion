@@ -23,6 +23,7 @@
  */
 
 const LIST_KEY = "apps:v1";
+const GROUPS_KEY = "groups:v1";
 const SEED_KEY = "seeded:v1";
 const UA = "app-version-worker/1.2 (+https://github.com/Kevinlidk/AppVersion)";
 /* Chocolatey 的 WAF 对裸请求较敏感,补齐常规请求头以降低被 403 的概率 */
@@ -186,6 +187,35 @@ async function readApps(env) {
 
 async function writeApps(env, list) {
   await kv(env).put(LIST_KEY, JSON.stringify(list));
+}
+
+async function readGroups(env) {
+  const raw = await kv(env).get(GROUPS_KEY);
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((g) => g && typeof g.id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeGroups(env, list) {
+  await kv(env).put(GROUPS_KEY, JSON.stringify(list));
+}
+
+/** 分组名:去空白、限长、非空 */
+function normalizeGroupName(raw) {
+  const name = String(raw ?? "").trim();
+  if (!name) throw new ApiError("分组名称不能为空");
+  if (name.length > 40) throw new ApiError("分组名称不能超过 40 个字符");
+  return name;
+}
+
+/** 下一个排序值(追加到末尾) */
+function nextOrder(items) {
+  const max = items.reduce((m, it) => Math.max(m, Number(it.order) || 0), -1);
+  return max + 1;
 }
 
 /**
@@ -410,6 +440,19 @@ function normalizeApp(input, base = {}) {
   // 推送通知默认关闭:需在表单中主动勾选才会纳入定时检查与推送
   if (input.notify !== undefined) out.notify = Boolean(input.notify);
   else if (out.notify === undefined) out.notify = false;
+  // 所属分组(null 表示未分组)与组内排序
+  if (input.groupId !== undefined) {
+    const g = input.groupId;
+    out.groupId = g === null || g === "" ? null : String(g);
+  } else if (out.groupId === undefined) {
+    out.groupId = null;
+  }
+  if (input.order !== undefined) {
+    const n = Number(input.order);
+    out.order = Number.isFinite(n) ? n : 0;
+  } else if (out.order === undefined) {
+    out.order = 0;
+  }
   return out;
 }
 
@@ -952,11 +995,14 @@ async function handleApi(request, env, pathname) {
   if (pathname === "/api/apps/export" && method === "GET") {
     await requireAdmin(env, request);
     const list = await readApps(env);
+    const groups = await readGroups(env);
     const payload = {
       format: "app-version-backup",
-      version: 1,
+      version: 2, // v2 起包含 groups 与应用的 groupId/order
       exportedAt: nowIso(),
       count: list.length,
+      groupCount: groups.length,
+      groups,
       apps: list,
     };
     const stamp = nowIso().replace(/[:T]/g, "-").slice(0, 19);
@@ -977,16 +1023,135 @@ async function handleApi(request, env, pathname) {
       throw new ApiError("导入文件格式不正确:应为 {\"apps\":[…]} 或应用数组");
     }
     if (records.length > 500) throw new ApiError("单次导入最多 500 条记录");
+
+    // 分组:备份里有就一并恢复(校验后重新分配 id 映射,避免与现有冲突)
+    const importedGroups = [];
+    if (Array.isArray(body.groups)) {
+      if (body.groups.length > 200) throw new ApiError("单次导入最多 200 个分组");
+      body.groups.forEach((grp, i) => {
+        if (!grp || typeof grp !== "object") return;
+        try {
+          importedGroups.push({
+            id: typeof grp.id === "string" && /^[A-Za-z0-9-]+$/.test(grp.id) ? grp.id : crypto.randomUUID(),
+            name: normalizeGroupName(grp.name),
+            order: Number.isFinite(Number(grp.order)) ? Number(grp.order) : i,
+            collapsed: Boolean(grp.collapsed),
+            createdAt: typeof grp.createdAt === "string" ? grp.createdAt : nowIso(),
+          });
+        } catch (e) {
+          throw new ApiError(`第 ${i + 1} 个分组无效:${e.message}`, 400);
+        }
+      });
+    }
+    const validGroupIds = new Set(importedGroups.map((x) => x.id));
+
     const list = [];
     records.forEach((rec, i) => {
       try {
-        list.push(normalizeImportedApp(rec));
+        const app = normalizeImportedApp(rec);
+        // 分组引用必须存在于本次导入的分组中,否则归为未分组
+        if (app.groupId && !validGroupIds.has(app.groupId)) app.groupId = null;
+        list.push(app);
       } catch (e) {
         throw new ApiError(`第 ${i + 1} 条记录无效:${e.message}`, e instanceof ApiError ? e.status : 400);
       }
     });
     await writeApps(env, list);
-    return json({ ok: true, imported: list.length });
+    await writeGroups(env, importedGroups);
+    return json({ ok: true, imported: list.length, groups: importedGroups.length });
+  }
+
+  /* ── 分组(查看公开,编辑需管理员)── */
+
+  if (pathname === "/api/groups" && method === "GET") {
+    return json(await readGroups(env));
+  }
+
+  if (pathname === "/api/groups" && method === "POST") {
+    await requireAdmin(env, request);
+    const body = await readJson(request);
+    const groups = await readGroups(env);
+    const group = {
+      id: crypto.randomUUID(),
+      name: normalizeGroupName(body.name),
+      order: nextOrder(groups),
+      collapsed: false,
+      createdAt: nowIso(),
+    };
+    groups.push(group);
+    await writeGroups(env, groups);
+    return json(group, 201);
+  }
+
+  let g = pathname.match(/^\/api\/groups\/([A-Za-z0-9-]+)$/);
+  if (g && (method === "PUT" || method === "DELETE")) {
+    await requireAdmin(env, request);
+    const groups = await readGroups(env);
+    const idx = groups.findIndex((x) => x.id === g[1]);
+    if (idx === -1) throw new ApiError("分组不存在", 404);
+
+    if (method === "PUT") {
+      const body = await readJson(request);
+      if (body.name !== undefined) groups[idx].name = normalizeGroupName(body.name);
+      if (body.collapsed !== undefined) groups[idx].collapsed = Boolean(body.collapsed);
+      if (body.order !== undefined) {
+        const n = Number(body.order);
+        if (Number.isFinite(n)) groups[idx].order = n;
+      }
+      await writeGroups(env, groups);
+      return json(groups[idx]);
+    }
+
+    // 删除分组:组内应用移回「未分组」,不连带删除应用
+    const gid = g[1];
+    groups.splice(idx, 1);
+    await writeGroups(env, groups);
+    const apps = await readApps(env);
+    let moved = 0;
+    for (const a of apps) {
+      if (a.groupId === gid) { a.groupId = null; moved++; }
+    }
+    if (moved) await writeApps(env, apps);
+    return json({ ok: true, movedApps: moved });
+  }
+
+  /* ── 布局保存(整表覆盖,需管理员)──
+     一次请求提交分组顺序 + 每个应用所属组与组内顺序,保证并发下结果一致 */
+  if (pathname === "/api/layout" && method === "PUT") {
+    await requireAdmin(env, request);
+    const body = await readJson(request);
+    const groups = await readGroups(env);
+    const apps = await readApps(env);
+    const byGroupId = new Map(groups.map((x) => [x.id, x]));
+    const byAppId = new Map(apps.map((x) => [x.id, x]));
+
+    if (Array.isArray(body.groups)) {
+      body.groups.forEach((item, i) => {
+        if (!item || typeof item.id !== "string") return;
+        const target = byGroupId.get(item.id);
+        if (!target) return;
+        target.order = i;
+        if (item.name !== undefined) target.name = normalizeGroupName(item.name);
+        if (item.collapsed !== undefined) target.collapsed = Boolean(item.collapsed);
+      });
+    }
+
+    if (Array.isArray(body.apps)) {
+      body.apps.forEach((item) => {
+        if (!item || typeof item.id !== "string") return;
+        const target = byAppId.get(item.id);
+        if (!target) return;
+        const gid = item.groupId === null || item.groupId === "" ? null : String(item.groupId);
+        // 只接受已存在的分组,避免脏引用
+        target.groupId = gid && byGroupId.has(gid) ? gid : null;
+        const n = Number(item.order);
+        target.order = Number.isFinite(n) ? n : 0;
+      });
+    }
+
+    await writeGroups(env, groups);
+    await writeApps(env, apps);
+    return json({ ok: true, groups: groups.length, apps: apps.length });
   }
 
   throw new ApiError("接口不存在", 404);
