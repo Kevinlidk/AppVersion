@@ -268,6 +268,8 @@
     object-fit: contain; background: #fff;
     border: 1px solid var(--border); padding: 3px;
   }
+  /* SVG 图标(YesIcon/selfhst 同源):自带完整画面,不加白底与内边距更清晰 */
+  .app-icon.is-svg { background: transparent; border-color: transparent; padding: 1px; }
   .app-icon-fallback {
     flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
@@ -618,9 +620,48 @@ function badgeOf(a) {
  *   3. Chocolatey→ 包图标 /content/packageimages/{id}.{版本}.png
  * 其余渠道无可靠规律,直接使用字母图标。
  */
+/** 名称 → selfhst 图标 slug(kebab-case) */
+function slugifyName(name) {
+  let s = String(name || "").toLowerCase().replace(/\+/g, "").replace(/\./g, "-");
+  s = s.replace(/[^a-z0-9]+/g, "-");
+  s = s.replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return s;
+}
+
+/**
+ * 由应用名称推导 selfhst(YesIcon 同源图标集) 的候选 slug。
+ * 只做保守收缩:仅当名称以通用后缀结尾时才尝试去掉后缀,
+ * 避免「Microsoft .NET」被误匹配成「microsoft」这类泛化结果。
+ */
+function selfhstSlugs(name) {
+  const base = slugifyName(name);
+  if (!base) return [];
+  const out = [base];
+  const suffixWords = new Set([
+    "desktop", "app", "client", "player", "tool", "runtime", "sdk",
+    "server", "for", "windows", "media", "the",
+  ]);
+  const parts = base.split("-");
+  // 逐词从尾部去掉通用后缀(如 telegram-desktop → telegram),
+  // 判断依据是「被去掉的那个词」是否是通用词,至少保留 1 个词。
+  for (let i = parts.length; i > 1; i--) {
+    const dropped = parts[i - 1];
+    const cut = parts.slice(0, i - 1).join("-");
+    if (!cut || !suffixWords.has(dropped)) break;
+    if (!out.includes(cut)) out.push(cut);
+  }
+  return out;
+}
+
 function iconCandidates(a) {
   const list = [];
   if (a.iconUrl) list.push(a.iconUrl);
+  // 1) 按名称自动匹配 selfhst 图标集(YesIcon 同源,7000+ 自托管应用图标)
+  //    多个候选全部加入,前一个 404 时自动试下一个
+  for (const slug of selfhstSlugs(a.name)) {
+    list.push("https://api.iconify.design/selfhst/" + encodeURIComponent(slug) + ".svg");
+  }
+  // 2) 渠道推断
   if (a.channel === "github" && a.repo) {
     const owner = a.repo.split("/")[0];
     if (owner) list.push("https://github.com/" + encodeURIComponent(owner) + ".png?size=64");
@@ -661,13 +702,16 @@ function iconBgOf(name) {
 }
 
 /** 图标 HTML:优先使用自定义图标地址,其次按渠道推断;失败则显示字母图标 */
+/** 图标 HTML:按候选顺序加载,失败自动换下一个,全部失败才用字母图标 */
 function iconHtml(a) {
   const bg = iconBgOf(a.name);
-  const url = iconCandidates(a)[0] || "";
-  if (!url) return fallbackIconHtml(a);
-  // 加载失败由全局函数处理(内联 onerror 嵌套引号容易被 HTML 解析截断)
-  return `<img class="app-icon" src="${esc(url)}" alt="" loading="lazy" decoding="async" ` +
+  const urls = iconCandidates(a).filter(Boolean);
+  if (!urls.length) return fallbackIconHtml(a);
+  // 候选地址存入 data 属性(用 | 分隔;图标 URL 本身不含 |)
+  const isSvg = /\.svg(\?|$)/i.test(urls[0]);
+  return `<img class="app-icon${isSvg ? " is-svg" : ""}" src="${esc(urls[0])}" alt="" loading="lazy" decoding="async" ` +
     `referrerpolicy="no-referrer" data-icon-bg="${bg}" data-icon-text="${esc(initialsOf(a.name))}" ` +
+    `data-icon-alt="${esc(urls.slice(1).join("|"))}" ` +
     `onerror="appVersionIconFallback(this)">`;
 }
 
@@ -677,8 +721,18 @@ function fallbackIconHtml(a) {
     `aria-hidden="true">${esc(initialsOf(a.name))}</span>`;
 }
 
-/** 图片加载失败:原地替换为字母图标(全局函数,供 img onerror 调用) */
+/** 图片加载失败:先试候选列表的下一个,全部失败才换成字母图标 */
 window.appVersionIconFallback = function (img) {
+  if (img.dataset.iconTried === undefined) img.dataset.iconTried = "0";
+  const alt = (img.dataset.iconAlt || "").split("|").filter(Boolean);
+  const tried = Number(img.dataset.iconTried);
+  if (tried < alt.length) {
+    img.dataset.iconTried = String(tried + 1);
+    const next = alt[tried];
+    img.classList.toggle("is-svg", /\.svg(\?|$)/i.test(next));
+    img.src = next;
+    return;
+  }
   const span = document.createElement("span");
   span.className = "app-icon-fallback";
   span.setAttribute("aria-hidden", "true");
