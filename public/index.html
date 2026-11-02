@@ -64,6 +64,10 @@
     -webkit-tap-highlight-color: transparent;
   }
   .container { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+  /* 宽屏利用横向空间:容器随屏幕放大,卡片按可用宽度自动多列排布 */
+  @media (min-width: 900px) { .container { max-width: 1140px; } }
+  @media (min-width: 1400px) { .container { max-width: 1360px; } }
+  @media (min-width: 1700px) { .container { max-width: 1560px; } }
   .hidden { display: none !important; }
 
   /* ── 顶栏 ── */
@@ -149,7 +153,10 @@
 
   /* ── 应用卡片 ── */
   .list { display: grid; gap: 12px; margin-top: 12px; }
-  @media (min-width: 640px) { .list { grid-template-columns: 1fr 1fr; } }
+  /* 自适应列数:每张卡片至少 320px,能放几张放几张,放不下自动换到下一行 */
+  @media (min-width: 640px) {
+    .list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  }
   .card {
     background: var(--card); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 14px 16px;
