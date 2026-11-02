@@ -17,7 +17,22 @@ const ghBody = {
   tag_name: "v2.0.0",
   html_url: "https://github.com/foo/bar/releases/tag/v2.0.0",
   published_at: "2026-01-01T00:00:00Z",
+  assets: [],
 };
+
+/** 构造 GitHub Release 响应,附带指定资产名单 */
+function ghReleaseWith(assetNames) {
+  return {
+    tag_name: "v2.0.0",
+    html_url: "https://github.com/foo/bar/releases/tag/v2.0.0",
+    published_at: "2026-01-01T00:00:00Z",
+    assets: assetNames.map((n) => ({
+      name: n,
+      browser_download_url: "https://github.com/foo/bar/releases/download/v2.0.0/" + encodeURIComponent(n),
+    })),
+  };
+}
+let ghAssets = null; // 非 null 时返回带资产的响应
 const chocoXml =
   '<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom">' +
   "<entry><updated>2026-01-01T00:00:00Z</updated>" +
@@ -83,7 +98,7 @@ globalThis.fetch = async (input, init) => {
         },
       });
     }
-    return new Response(JSON.stringify(ghBody), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(ghAssets ? ghReleaseWith(ghAssets) : ghBody), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (u === "https://notify.example/hook") {
     hookCalls.push({ url: u, body: init && init.body });
@@ -509,6 +524,28 @@ await test("appUrl/downloadUrl/linkName:可保存、校验 https、默认值正�
 
   await call("/api/apps/" + ok.id, { method: "DELETE" });
   await call("/api/apps/" + plain.id, { method: "DELETE" });
+});
+
+await test("detect-links:下载资产优先级 x64.exe > x64.msi > 其他", async () => {
+  const detect = async (names) => {
+    ghAssets = names;
+    const d = await bodyOf(await call("/api/apps/detect-links", post({ name: "T", channel: "github", repo: "foo/bar" })));
+    return decodeURIComponent((d.downloadUrl || "").split("/").pop());
+  };
+
+  // x64.exe 优先于 x64.msi
+  assertEq(await detect(["app-x64.msi", "app-x64.exe"]), "app-x64.exe", "x64.exe 优先");
+  // 只有 msi 时选 x64.msi,而不是 arm64.exe
+  assertEq(await detect(["app-arm64.exe", "app-x64.msi"]), "app-x64.msi", "x64.msi 优于 arm exe");
+  // 跳过校验/签名等非安装文件
+  assertEq(await detect(["app-x64.exe.sha256", "checksums.txt", "app-x64.exe"]), "app-x64.exe", "跳过校验文件");
+  // 其它平台安装包可作兜底
+  assertEq(await detect(["app-arm64.dmg", "app-x64.deb"]), "app-x64.deb", "非 Windows 时按平台打分");
+  // 没有任何资产时回退到 Release 页面
+  ghAssets = [];
+  const none = await bodyOf(await call("/api/apps/detect-links", post({ name: "T", channel: "github", repo: "foo/bar" })));
+  if (!/\/releases\/tag\//.test(none.downloadUrl)) throw new Error("应回退到 Release 页面: " + none.downloadUrl);
+  ghAssets = null;
 });
 
 await test("detect-links:GitHub 渠道返回仓库主页与 Release 下载页", async () => {

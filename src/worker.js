@@ -728,6 +728,58 @@ async function fetchOfficialLatest(app) {
   return { version, releaseUrl: url, publishedAt: null };
 }
 
+/**
+ * 从 GitHub Release 资产中挑选最合适的下载包。
+ * 优先级:x64.exe → x64.msi → 其他 exe → 其他 msi → 其它安装包(dmg/pkg/deb/rpm/AppImage/msix)
+ * 会跳过签名/校验/调试等非安装文件,并降低 arm / 32 位资产的优先级。
+ * @returns {string} 下载地址;没有合适资产时返回 ""
+ */
+function pickDownloadAsset(assets) {
+  if (!Array.isArray(assets) || !assets.length) return "";
+
+  const isX64 = (n) => /(?:^|[^a-z0-9])(x64|win64|amd64|x86[_-]64|64[_-]?bit)(?:[^a-z0-9]|$)/.test(n);
+  const isArm = (n) => /(?:^|[^a-z0-9])(arm64|aarch64|arm)(?:[^a-z0-9]|$)/.test(n);
+  const isX86 = (n) => /(?:^|[^a-z0-9])(x86|ia32|i386|win32|32[_-]?bit)(?:[^a-z0-9]|$)/.test(n);
+  // 明显的非安装产物(签名、校验和、调试符号、源码包)
+  const isJunk = (n) =>
+    /\.(sha\d*|sig|asc|md5|txt|json|yml|yaml|pem)$/i.test(n) ||
+    /(?:^|[^a-z0-9])(sources?|symbols?|debug|pdb|checksums?|sbom)(?:[^a-z0-9]|$)/.test(n);
+
+  const extOf = (n) => {
+    const m = n.match(/\.([a-z0-9]+)$/i);
+    return m ? m[1].toLowerCase() : "";
+  };
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const asset of assets) {
+    const url = asset && asset.browser_download_url;
+    if (!url) continue;
+    const name = String(asset.name || url.split("/").pop() || "");
+    const lower = name.toLowerCase();
+    if (isJunk(lower)) continue;
+
+    const ext = extOf(lower);
+    let score = 0;
+    // 主排序:架构 + 安装包类型
+    if (ext === "exe") score = isX64(lower) ? 100 : 80;
+    else if (ext === "msi") score = isX64(lower) ? 95 : 75;
+    else if (ext === "msix") score = 60;
+    else if (ext === "dmg" || ext === "pkg") score = 55;
+    else if (ext === "deb" || ext === "rpm" || ext === "appimage") score = 50;
+    else score = 10; // 其它文件仅作最后兜底
+    // 架构微调:arm 与 32 位降级(而非直接排除,以免某些项目只有这类构建)
+    if (isArm(lower)) score -= 60;
+    else if (isX86(lower) && !isX64(lower)) score -= 20;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = url;
+    }
+  }
+  return best || "";
+}
+
 /** 按应用渠道分发查询;manual 渠道不支持自动查询 */
 async function fetchLatest(app, env) {
   if (app.channel === "github" && app.repo) return fetchGitHubLatest(app.repo, env);
@@ -1047,24 +1099,19 @@ async function handleApi(request, env, pathname) {
       out.appUrl = "https://github.com/" + draft.repo;
       let res = await fetchWithRetry(`https://api.github.com/repos/${draft.repo}/releases/latest`, { headers });
       if (res.status === 404) {
-        res = await fetchWithRetry(`https://api.github.com/repos/${draft.repo}/releases?per_page=1`, { headers });
+        res = await fetchWithRetry(`${base}/releases?per_page=1`, { headers });
         if (res.ok) {
           const arr = await res.json();
           if (Array.isArray(arr) && arr.length) {
-            out.downloadUrl = arr[0].html_url || "";
+            // 同样按 x64.exe → x64.msi 的优先级挑选资产
+            out.downloadUrl = pickDownloadAsset(arr[0].assets) || arr[0].html_url || "";
             out.source = "github-release";
           }
         }
       } else if (res.ok) {
         const r = await res.json();
-        out.downloadUrl = r.html_url || "";
-        // 优先挑一个安装包资产(Windows 安装器优先)
-        const assets = Array.isArray(r.assets) ? r.assets : [];
-        const preferred = assets.find((x) => /\.(exe|msi|msix|dmg|pkg|deb|rpm|appimage)$/i.test(x.name || ""))
-          || assets.find((x) => x.browser_download_url);
-        if (preferred && preferred.browser_download_url) {
-          out.downloadUrl = preferred.browser_download_url;
-        }
+        // 优先选安装包: x64.exe → x64.msi → 其他 exe/msi → 其它平台安装包
+        out.downloadUrl = pickDownloadAsset(r.assets) || r.html_url || "";
         out.source = "github-release";
       }
     } else if (draft.channel === "winget" && draft.packageId) {
