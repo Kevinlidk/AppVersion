@@ -21,7 +21,7 @@ const GlyphWind = (() => {
       touch:{stir:1,ripple:1,slowPxS:60,fastPxS:800},
       composition:{card:{centerY:.45,calmX:250,calmY:80,left:.3}},
       grid:{cellCss:6.5,minCols:24,minRows:8,maxDevicePixels:21000000},
-      power:{frameMs:40,rippleFrameMs:10,budgetS:180,settleS:8,resumeS:3}
+      power:{frameMs:40,rippleFrameMs:10,budgetS:86400,settleS:8,resumeS:3}
     };
   }
   function random(seed) {

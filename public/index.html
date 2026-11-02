@@ -43,10 +43,18 @@
     }
   }
   * { box-sizing: border-box; }
-  /* 页面底色放在 html 上、body 保持透明:让背景画布(#bg-stage, z-index:-2)可见 */
-  html { -webkit-text-size-adjust: 100%; background: var(--bg); }
-  /* 背景墨色跟随主题变量(engine.css 的默认灰会被这里覆盖) */
-  #bg-stage { color: var(--muted); }
+  /* 深色页面底色(参考项目同款 #333),让浅灰字形的动态背景清晰可见;
+     卡片 / 顶栏 / 输入框等 UI 仍保持浅色主题 */
+  html { -webkit-text-size-adjust: 100%; background: #333; }
+  /* 薄雾高光层:与参考项目一致,叠在画布之上、内容之下,轻微提亮 */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: linear-gradient(rgba(255, 255, 255, .10), rgba(255, 255, 255, .04));
+  }
   body {
     margin: 0;
     background: transparent;
@@ -61,10 +69,8 @@
   .topbar {
     position: sticky; top: 0; z-index: 10;
     padding-top: env(safe-area-inset-top);
-    background: var(--bg);
-    background: color-mix(in srgb, var(--bg) 82%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    /* 深色动态背景之上用实色浅色顶栏,保证标题与按钮清晰可读 */
+    background: var(--card);
     border-bottom: 1px solid var(--border);
   }
   /* 注意:仅设纵向内边距,避免覆盖 .container 的左右 16px 内边距 */
@@ -123,7 +129,10 @@
     font-size: 13px; cursor: pointer;
   }
   .chip.active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
-  .stats { color: var(--muted); font-size: 13px; margin-top: 12px; min-height: 1.2em; }
+  .stats { font-size: 13px; margin-top: 12px; min-height: 1.2em; }
+  /* 以下文本直接压在深色动态背景上,用浅色保证可读(卡片内不受影响) */
+  .stats, .empty, .footer { color: #c3cbdb; }
+  .footer a { color: #93c5fd; }
   .manage { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
   .manage .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
 
@@ -789,64 +798,10 @@ $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
   await load();
 })();
 </script>
-<!-- 动态背景:GlyphWind WebGL2 引擎(先加载引擎,再初始化) -->
+<!-- 动态背景:与参考项目完全一致的接线方式 ——
+     先加载引擎(暴露全局 GlyphWind),再由 loader.js 按默认参数挂载。
+     支持 ?seed=123&look=mixed|lettered|figured 切换图案。 -->
 <script src="background/renderer.js"></script>
-<script>
-(function () {
-  if (typeof GlyphWind === "undefined") return; // 引擎缺失时保持纯底色
-  var stage = document.getElementById("bg-stage");
-  if (!stage) return;
-
-  // 引擎内置 180 秒省电预算:到期后画面永久定格。
-  // 装饰背景需要一直滚动,故调大预算并由下面的保活定时器续期。
-  var KEEPALIVE_MS = 30 * 60 * 1000;
-
-  // URL 可选参数:?seed=123&look=mixed|lettered|figured&motion=off
-  var params = new URLSearchParams(location.search);
-  if (params.get("motion") === "off") return; // 显式关闭动画,仅保留静态底色
-
-  var looks = { mixed: 1, lettered: 1, figured: 1 };
-  var look = looks[params.get("look")] ? params.get("look") : "mixed";
-  var seedRaw = Number(params.get("seed"));
-  var seed = Number.isFinite(seedRaw) ? seedRaw : 0x19a4c637;
-
-  var settings = Object.assign(GlyphWind.defaults(), {
-    seed: seed,
-    look: look,
-    interactive: false // 装饰性:不绑定指针/键盘监听,不拦截任何点击
-  });
-  settings.power.budgetS = 86400; // 24 小时预算(默认 180 秒会让背景 3 分钟后定格)
-
-  // 系统开启"减少动态效果"时不停止动画,而是降为柔和模式:风速与亮度明显降低
-  var reduce = window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (reduce) {
-    settings.wind.energy = 0.35;
-    settings.strength.scale = 0.7;
-  }
-
-  var keepAlive = null;
-  var instance = GlyphWind.create({
-    element: stage,
-    settings: function () { return settings; },
-    timing: function () { return { fadeIn: 3000, fadeOut: 500 }; },
-    onReady: function () {
-      instance.setRunning(true);
-      // 定期续期,避免长时间挂机后 settle 到静止
-      keepAlive = setInterval(function () {
-        try { instance.refresh(); } catch (e) { /* 忽略 */ }
-      }, KEEPALIVE_MS);
-    },
-    onError: function (err) {
-      console.error("背景引擎错误:", err);
-      stage.style.display = "none"; // 优雅回退到纯底色
-    }
-  });
-
-  window.addEventListener("pagehide", function () {
-    if (keepAlive) clearInterval(keepAlive);
-  });
-})();
-</script>
+<script src="background/loader.js"></script>
 </body>
 </html>

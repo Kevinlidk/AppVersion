@@ -40,18 +40,25 @@ binding = "ASSETS"
 # 未配置时该接口只接受管理员会话,自动化调用会被拒绝。
 
 # ── KV 存储(必配)────────────────────────────────────────
-# 保存应用列表需要绑定一个 KV 命名空间,两种方式任选其一:
+# ⚠️ 重要:KV 绑定必须写在本文件里,不要只在 Dashboard 手动添加。
+#    因为本项目通过 Git 集成部署(GitHub → Cloudflare Workers Builds),
+#    每次部署都会以本文件为准重建 Worker 配置,只存在于 Dashboard 的
+#    绑定会在下一次部署时被清掉(表现为页面提示"未绑定 KV 存储")。
 #
-# 方式 A(Dashboard 导入部署):部署后在 Worker 的
-#   「设置 → 绑定 → KV 命名空间」添加绑定,变量名称填 APP_KV
+# ▶ 填写步骤:
+#   1. Cloudflare Dashboard →「存储和数据库」→「KV」
+#      找到本项目的命名空间,点进去复制页面顶部的 ID
+#      (32 位十六进制,形如 a1b2c3d4e5f67890a1b2c3d4e5f67890)
+#   2. 把下面 REPLACE_WITH_YOUR_KV_NAMESPACE_ID 替换成该 ID
+#   3. 提交推送 → 等待 Cloudflare 重新部署,绑定会自动重建
 #
-# 方式 B(wrangler CLI 部署):先执行
+# 若还没创建过命名空间:
 #   npx wrangler kv namespace create APP_KV
-# 然后取消下面三行注释,并把 id 替换为命令输出的真实 id:
-#
-# [[kv_namespaces]]
-# binding = "APP_KV"
-# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+# 或在 Dashboard「存储和数据库 → KV」点「创建」,然后把 ID 填到下面。
+
+[[kv_namespaces]]
+binding = "APP_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 
 [observability]
 enabled = true

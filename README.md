@@ -19,9 +19,7 @@
 - 📤 **配置导入 / 导出** —— 管理员可一键把全部关注应用导出为 JSON 配置文件备份,或导入配置文件恢复/迁移(导入覆盖当前列表,操作前有确认提示)
 - ✅ **批量刷新** —— 一键刷新全部自动渠道应用,逐一显示进度
 - ✅ **搜索筛选** —— 按名称 / 仓库 / 包 ID / 备注搜索,按渠道筛选
-- 🎨 **动态背景** —— GlyphWind WebGL2 字形流背景(`public/background/` 套件),墨色跟随深浅色主题,不拦截任何点击;支持 `?seed=123&look=mixed|lettered|figured` 切换图案,`?motion=off` 关闭动画只看纯底色
-  - 系统开启「减少动态效果」时**不停止动画**,而是降为柔和模式(风速 ×0.35、亮度 ×0.7)
-  - 引擎内置的 180 秒省电预算已上调至 24 小时,并有 30 分钟保活续期,长时间挂机不会定格
+- 🎨 **动态背景** —— GlyphWind WebGL2 字形流背景(`public/background/` 套件,与参考项目接线一致),深色页面底 `#333` + 白色薄雾层,浅色 UI 卡片浮于其上;支持 `?seed=123&look=mixed|lettered|figured` 切换图案
 - 📱 **移动端优先** —— 响应式布局(适配 360px~430px 常见手机屏宽)、大号点击区域、刘海屏安全区适配、深色模式自动跟随系统
 
 > 💡 **关于 UniGetUI**:它本身只提供本机 IPC/CLI 接口,没有公开的 Web 版本查询 API;本项目的 Chocolatey / winget 渠道直接对接它背后聚合的官方数据源,效果等同且可在云端运行。
@@ -51,8 +49,9 @@
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers 和 Pages** → **创建** → 选择「**导入一个 Git 仓库**」,授权并选择本仓库(`Kevinlidk/AppVersion`)
 2. 构建配置保持默认(会自动执行 `npx wrangler deploy`)并部署
-3. 创建 KV 命名空间:左侧 **存储和数据库 → KV** → 创建命名空间(如 `app-version`)
-4. 回到该 Worker → **设置 → 绑定** → 添加 **KV 命名空间**:变量名称填 `APP_KV`,选择刚创建的命名空间
+3. 创建 KV 命名空间:左侧 **存储和数据库 → KV** → 创建命名空间(如 `app-version`),点进去复制命名空间 **ID**
+4. **把 ID 填进 `wrangler.toml` 的 `[[kv_namespaces]]`**(替换 `REPLACE_WITH_YOUR_KV_NAMESPACE_ID`)后提交推送
+   > ⚠️ 不要只在 Dashboard「设置 → 绑定」里加。本项目通过 Git 集成部署,每次部署会以 `wrangler.toml` 为准重建 Worker 配置,**只存在于 Dashboard 的绑定会在下次部署时被清掉**(页面报"未绑定 KV 存储"就是这个原因)。
 5. **(必配)设置管理员密码** → 见下文「管理员与权限」
 6. **(必配)设置定时检查令牌并在 GitHub 配置 Actions 密钥** → 见下文「定时检查(由 GitHub Actions 驱动)」
 7. (可选)配置更新推送通知 → 见下文「通知推送配置」
@@ -128,7 +127,7 @@ curl -X POST https://app-version.kevinlidk.cn/api/check -H "Authorization: Beare
 
 | 环境变量 | 必配 | 说明 |
 | --- | --- | --- |
-| `APP_KV`(KV 绑定) | ✅ | 应用列表存储 |
+| `APP_KV`(KV 绑定) | ✅ | 应用列表存储。**必须写在 `wrangler.toml` 中**,否则每次部署会丢失 |
 | `ADMIN_PASSWORD` | ✅ | 管理员密码,编辑类接口的登录凭据(见「管理员与权限」) |
 | `CRON_SECRET` | ✅ | GitHub Actions 触发 `/api/check` 的令牌(见上一节) |
 | `GITHUB_TOKEN` | 推荐 | 提升 GitHub API 速率限制(GitHub 渠道与 winget 渠道共用) |
