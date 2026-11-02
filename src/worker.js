@@ -11,8 +11,10 @@
  * 存储:Cloudflare KV,绑定变量名 APP_KV(应用列表序列化为单个 JSON 文档)。
  * 必配环境变量:
  *  - ADMIN_PASSWORD       管理员密码(编辑监控应用须登录;未配置时编辑接口一律拒绝)
+ * 强建议环境变量(不配则 GitHub / winget 渠道极易触发限流):
+ *  - GITHUB_TOKEN         GitHub Personal Access Token(只需 public_repo 读权限即可)
+ *                         Worker 出口 IP 是多租户共享的,未认证限额 60 次/小时会被别人耗尽
  * 可选环境变量:
- *  - GITHUB_TOKEN         提升 GitHub API 速率限制(GitHub 渠道与 winget 渠道共用)
  *  - FEISHU_WEBHOOK_URL   飞书群自定义机器人 webhook
  *  - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
  *  - BARK_URL             Bark 设备地址,如 https://api.day.app/yourkey
@@ -22,7 +24,14 @@
 
 const LIST_KEY = "apps:v1";
 const SEED_KEY = "seeded:v1";
-const UA = "app-version-worker/1.1";
+const UA = "app-version-worker/1.2 (+https://github.com/Kevinlidk/AppVersion)";
+/* Chocolatey 的 WAF 对裸请求较敏感,补齐常规请求头以降低被 403 的概率 */
+const CHOCO_HEADERS = {
+  "user-agent": UA,
+  accept: "application/atom+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+};
+const CHOCO_HOST = "https://community.chocolatey.org";
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CHOCO_ID_RE = /^[A-Za-z0-9_.+-]+$/;
 const WINGET_ID_RE = /^[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+$/;
@@ -273,6 +282,29 @@ async function ghHeaders(env) {
   return headers;
 }
 
+/** 把 GitHub 的限流响应翻译成可操作的提示(含重置时间与剩余额度) */
+function githubThrottleError(res, env) {
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  const reset = Number(res.headers.get("x-ratelimit-reset") || 0);
+  let when = "";
+  if (reset) {
+    const mins = Math.max(1, Math.ceil((reset * 1000 - Date.now()) / 60000));
+    when = `约 ${mins} 分钟后(北京时间 ${new Date(reset * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}）重置`;
+  }
+  if (env && env.GITHUB_TOKEN) {
+    return new ApiError(
+      `GitHub API 速率受限${when ? "," + when : ""}。已配置 GITHUB_TOKEN,可能是该 Token 额度被其他程序共用`,
+      429
+    );
+  }
+  return new ApiError(
+    "GitHub API 速率受限(匿名额度 60 次/小时,Worker 出口 IP 为多租户共享,极易被耗尽)" +
+      (when ? "," + when : "") +
+      "。请务必在 Worker 中配置 GITHUB_TOKEN(设置 → 变量和机密),配置后为 5000 次/小时",
+    429
+  );
+}
+
 async function fetchGitHubLatest(repo, env) {
   const headers = await ghHeaders(env);
   const pick = (r) => ({
@@ -282,20 +314,18 @@ async function fetchGitHubLatest(repo, env) {
   });
 
   const base = `https://api.github.com/repos/${repo}`;
-  let res = await fetch(`${base}/releases/latest`, { headers });
+  let res = await fetchWithRetry(`${base}/releases/latest`, { headers });
 
   if (res.status === 404) {
     // 没有“最新正式版”(latest)时,回退取最近一条 Release
-    res = await fetch(`${base}/releases?per_page=1`, { headers });
+    res = await fetchWithRetry(`${base}/releases?per_page=1`, { headers });
     if (res.ok) {
       const arr = await res.json();
       if (Array.isArray(arr) && arr.length) return pick(arr[0]);
     }
     throw new ApiError("该仓库暂未发布任何 Release", 404);
   }
-  if (res.status === 403 || res.status === 429) {
-    throw new ApiError("GitHub API 速率受限,请稍后重试,或在 Worker 中配置 GITHUB_TOKEN", 429);
-  }
+  if (res.status === 403 || res.status === 429) throw githubThrottleError(res, env);
   if (!res.ok) throw new ApiError(`GitHub API 请求失败(HTTP ${res.status})`, 502);
 
   const r = await res.json();
@@ -303,22 +333,87 @@ async function fetchGitHubLatest(repo, env) {
   return pick(r);
 }
 
-/** Chocolatey 社区源官方 OData API(与 UniGetUI 聚合的同一数据源) */
-async function fetchChocolateyLatest(packageId) {
-  const filter = `(Id eq '${packageId}') and IsLatestVersion`;
-  const res = await fetch(
-    `https://community.chocolatey.org/api/v2/Packages()?$filter=${encodeURIComponent(filter)}`,
-    { headers: { "user-agent": UA, accept: "application/atom+xml, application/xml" } }
-  );
-  if (!res.ok) throw new ApiError(`Chocolatey API 请求失败(HTTP ${res.status})`, 502);
+/**
+ * 网络级重试:仅对连接异常与 5xx 重试。
+ * 429/403 明确不重试 —— 重试只会加重限流甚至触发更长的封禁。
+ */
+async function fetchWithRetry(url, opts, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, opts);
+      if (res.status >= 500 && i < attempts - 1) {
+        await sleep(300 * (i + 1));
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await sleep(300 * (i + 1));
+    }
+  }
+  throw new ApiError(`网络请求失败:${(lastErr && lastErr.message) || "连接异常"},请稍后重试`, 502);
+}
 
-  const xml = await res.text();
+const CHOCO_BLOCKED_MSG =
+  "Chocolatey 拒绝访问(HTTP 403):所在网络出口可能被其 WAF 拦截,请稍后重试;" +
+  "若持续失败,可改用 winget 渠道(同一应用通常也有 winget 包)";
+
+/**
+ * Chocolatey 最新版本。
+ * 主路径:GET /api/v2/package/{id} 只读 302 的 Location(约 165 字节)
+ *         形如 https://packages.chocolatey.org/vlc.3.0.24.nupkg
+ * 兜底:  OData 查询 Packages()($filter=IsLatestVersion)
+ * 说明:packages.chocolatey.org 的 /api/ 路径对任何 UA 都返回 403,
+ *       但 nupkg 下载正常,因此只在 Location 里取版本、不去访问该域名。
+ */
+async function fetchChocolateyLatest(packageId) {
+  const redirectUrl = `${CHOCO_HOST}/api/v2/package/${encodeURIComponent(packageId)}`;
+  let res;
+  try {
+    // redirect: "manual" —— 不跟随到 packages.chocolatey.org,只取 Location
+    res = await fetchWithRetry(redirectUrl, { headers: CHOCO_HEADERS, redirect: "manual" });
+  } catch (e) {
+    res = null;
+  }
+
+  if (res) {
+    if (res.status === 403) throw new ApiError(CHOCO_BLOCKED_MSG, 403);
+    if (res.status === 404) throw new ApiError("Chocolatey 源中未找到该包,请检查包 ID", 404);
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location") || "";
+      const file = decodeURIComponent((loc.split("/").pop() || "").split("?")[0]);
+      const idLower = packageId.toLowerCase();
+      if (file.toLowerCase().startsWith(idLower + ".") && /\.nupkg$/i.test(file)) {
+        const version = file.slice(packageId.length + 1, -".nupkg".length);
+        if (version) {
+          return {
+            version,
+            releaseUrl: `${CHOCO_HOST}/packages/${encodeURIComponent(packageId)}`,
+            publishedAt: null,
+          };
+        }
+      }
+    }
+  }
+
+  // 兜底:OData(部分代理/环境可能不返回 Location)
+  const filter = `(Id eq '${packageId}') and IsLatestVersion`;
+  const odata = await fetchWithRetry(
+    `${CHOCO_HOST}/api/v2/Packages()?$filter=${encodeURIComponent(filter)}`,
+    { headers: CHOCO_HEADERS }
+  );
+  if (odata.status === 403) throw new ApiError(CHOCO_BLOCKED_MSG, 403);
+  if (odata.status === 429) throw new ApiError("Chocolatey API 请求过于频繁,请稍后重试", 429);
+  if (!odata.ok) throw new ApiError(`Chocolatey API 请求失败(HTTP ${odata.status})`, 502);
+
+  const xml = await odata.text();
   const version = (xml.match(/<d:Version[^>]*>([^<]*)<\/d:Version>/) || [])[1];
   if (!version) throw new ApiError("Chocolatey 源中未找到该包,请检查包 ID", 404);
   const published = (xml.match(/<updated[^>]*>([^<]*)<\/updated>/) || [])[1] || null;
   return {
     version: version.trim(),
-    releaseUrl: `https://community.chocolatey.org/packages/${encodeURIComponent(packageId)}`,
+    releaseUrl: `${CHOCO_HOST}/packages/${encodeURIComponent(packageId)}`,
     publishedAt: published,
   };
 }
@@ -330,22 +425,19 @@ async function fetchChocolateyLatest(packageId) {
 async function fetchWingetLatest(packageId, env) {
   const parts = packageId.split(".");
   const dir = `manifests/${packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `https://api.github.com/repos/microsoft/winget-pkgs/contents/${dir}`,
     { headers: await ghHeaders(env) }
   );
   if (res.status === 404) throw new ApiError("winget 源中未找到该包,请检查包 ID", 404);
-  if (res.status === 403 || res.status === 429) {
-    throw new ApiError("GitHub API 速率受限,请稍后重试,或在 Worker 中配置 GITHUB_TOKEN", 429);
-  }
+  if (res.status === 403 || res.status === 429) throw githubThrottleError(res, env);
   if (!res.ok) throw new ApiError(`winget 源查询失败(HTTP ${res.status})`, 502);
 
   const entries = await res.json();
   const versions = (Array.isArray(entries) ? entries : [])
     .filter((e) => e && e.type === "dir")
     .map((e) => e.name);
-  if (!versions.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);
-  const latest = versions.sort(compareVersions)[versions.length - 1];
+  if (!versions.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);  const latest = versions.sort(compareVersions)[versions.length - 1];
   return {
     version: latest,
     releaseUrl: `https://github.com/microsoft/winget-pkgs/tree/master/${dir}`,

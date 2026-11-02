@@ -9,7 +9,7 @@ import worker from "../src/worker.js";
 
 /* ── mock 外部 API ── */
 let ghMode = "ok"; // ok | notfound | ratelimited
-let chocoMode = "ok"; // ok | notfound
+let chocoMode = "ok"; // ok | notfound | blocked | odataonly
 let wingetMode = "ok"; // ok | notfound
 const hookCalls = [];
 
@@ -42,7 +42,24 @@ globalThis.fetch = async (input, init) => {
     }
     return new Response(JSON.stringify(wingetEntries), { status: 200, headers: { "content-type": "application/json" } });
   }
-  if (u.startsWith("https://community.chocolatey.org/")) {
+  if (u.startsWith("https://community.chocolatey.org/api/v2/package/")) {
+    if (chocoMode === "blocked") {
+      return new Response("Forbidden", { status: 403 });
+    }
+    if (chocoMode === "notfound") {
+      return new Response("Not Found", { status: 404 });
+    }
+    // 主路径:302 指向 nupkg,文件名即 包ID.版本.nupkg;odataonly 时不返回 Location
+    if (chocoMode !== "odataonly") {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://packages.chocolatey.org/vlc.9.9.9.nupkg" },
+      });
+    }
+    return new Response("", { status: 200 });
+  }
+  if (u.startsWith("https://community.chocolatey.org/api/v2/Packages()")) {
+    if (chocoMode === "blocked") return new Response("Forbidden", { status: 403 });
     if (chocoMode === "notfound") {
       return new Response('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>', { status: 200, headers: { "content-type": "application/atom+xml" } });
     }
@@ -56,7 +73,15 @@ globalThis.fetch = async (input, init) => {
       return new Response(JSON.stringify({ message: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } });
     }
     if (ghMode === "ratelimited") {
-      return new Response(JSON.stringify({ message: "API rate limit exceeded" }), { status: 403, headers: { "content-type": "application/json" } });
+      const reset = Math.floor(Date.now() / 1000) + 600;
+      return new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+        status: 403,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(reset),
+        },
+      });
     }
     return new Response(JSON.stringify(ghBody), { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -247,26 +272,52 @@ await test("POST refresh:GitHub 无 latest Release 时回退到最近一条", as
   ghMode = "ok";
 });
 
-await test("POST refresh:GitHub 速率受限时返回 429 与提示", async () => {
+await test("POST refresh:GitHub 速率受限时返回 429,含重置时间与 GITHUB_TOKEN 建议", async () => {
   ghMode = "ratelimited";
   const list = await bodyOf(await call("/api/apps"));
   const target = list.find((a) => a.channel === "github");
   const res = await call("/api/apps/" + target.id + "/refresh", { method: "POST" });
   assertEq(res.status, 429, "状态码");
-  const b = await bodyOf(res);
-  if (!/速率受限/.test(b.error)) throw new Error("缺少提示文案: " + b.error);
+  const err = (await bodyOf(res)).error;
+  if (!/速率受限/.test(err)) throw new Error("缺少限流提示: " + err);
+  if (!/GITHUB_TOKEN/.test(err)) throw new Error("缺少 GITHUB_TOKEN 建议: " + err);
+  if (!/重置/.test(err)) throw new Error("缺少重置时间: " + err);
   ghMode = "ok";
 });
 
-await test("POST refresh:Chocolatey 查询成功并解析 XML", async () => {
+await test("POST refresh:Chocolatey 主路径——从 302 Location 解析版本(不下载包)", async () => {
+  chocoMode = "ok";
   const list = await bodyOf(await call("/api/apps"));
   const target = list.find((a) => a.channel === "chocolatey");
   const res = await call("/api/apps/" + target.id + "/refresh", { method: "POST" });
   assertEq(res.status, 200, "状态码");
   const app = await bodyOf(res);
-  assertEq(app.latestVersion, "9.9.9", "最新版本");
+  assertEq(app.latestVersion, "9.9.9", "从 vlc.9.9.9.nupkg 解析版本");
   if (app.releaseUrl !== "https://community.chocolatey.org/packages/vlc") throw new Error("releaseUrl 不符: " + app.releaseUrl);
+});
+
+await test("POST refresh:Chocolatey 无 Location 时回退 OData", async () => {
+  chocoMode = "odataonly";
+  const list = await bodyOf(await call("/api/apps"));
+  const target = list.find((a) => a.channel === "chocolatey");
+  const res = await call("/api/apps/" + target.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "状态码");
+  const app = await bodyOf(res);
+  assertEq(app.latestVersion, "9.9.9", "OData 兜底版本");
   assertEq(app.publishedAt, "2026-01-01T00:00:00Z", "发布时间");
+  chocoMode = "ok";
+});
+
+await test("POST refresh:Chocolatey 403 给出 WAF 拦截提示(非笼统报错)", async () => {
+  chocoMode = "blocked";
+  const list = await bodyOf(await call("/api/apps"));
+  const target = list.find((a) => a.channel === "chocolatey");
+  const res = await call("/api/apps/" + target.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 403, "状态码");
+  const err = (await bodyOf(res)).error;
+  if (!/WAF|拦截/.test(err)) throw new Error("未提示 WAF 拦截: " + err);
+  if (!/winget/.test(err)) throw new Error("未给出替代渠道建议: " + err);
+  chocoMode = "ok";
 });
 
 await test("POST refresh:Chocolatey 无此包返回 404", async () => {

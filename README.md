@@ -9,7 +9,7 @@
 - ✅ **应用管理** —— 添加 / 编辑 / 删除关注的应用(名称、版本来源、当前版本、备注)
 - ✅ **多渠道版本查询** ——
   - **GitHub Releases**:自动拉取最新正式版,无 latest 时回退最近一条 Release
-  - **Chocolatey 社区源**:官方 OData API 自动查询(也是 [UniGetUI](https://github.com/Devolutions/UniGetUI) 聚合的同一数据源)
+  - **Chocolatey 社区源**:优先读 `/api/v2/package/{id}` 的 302 重定向(约 165 字节,从 nupkg 文件名取版本),失败时回退 OData 查询
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
 - ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);支持按应用关闭推送、去重防骚扰
@@ -151,7 +151,7 @@ curl -X POST https://app-version.kevinlidk.cn/api/check -H "Authorization: Beare
 | `APP_KV`(KV 绑定) | ✅ | 应用列表存储。由环境变量 `KV_NAMESPACE_ID` 在部署前注入,无需手改配置 |
 | `ADMIN_PASSWORD` | ✅ | 管理员密码,编辑类接口的登录凭据(见「管理员与权限」) |
 | `CRON_SECRET` | ✅ | GitHub Actions 触发 `/api/check` 的令牌(见上一节) |
-| `GITHUB_TOKEN` | 推荐 | 提升 GitHub API 速率限制(GitHub 渠道与 winget 渠道共用) |
+| `GITHUB_TOKEN` | **强烈建议** | GitHub Personal Access Token。GitHub 与 winget 渠道共用;Worker 出口 IP 是多租户共享的,匿名额度(60 次/小时)**极易被其他租户耗尽**而导致刷新失败,配置后为 5000 次/小时 |
 | `FEISHU_WEBHOOK_URL` | 可选 | 飞书群自定义机器人 webhook 地址 |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | 可选 | Telegram Bot 发消息 |
 | `BARK_URL` | 可选 | Bark(iOS)设备推送地址,如 `https://api.day.app/yourkey` |
@@ -163,7 +163,9 @@ npx wrangler secret put FEISHU_WEBHOOK_URL
 npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
 ```
 
-> ⚠️ **建议配置 `GITHUB_TOKEN`**:GitHub 渠道与 winget 渠道都调用 GitHub API,未认证限额仅 60 次/小时/IP——Cloudflare Workers 出口 IP 为多租户共享,很容易触顶;配置后提升到 5000 次/小时。
+> ⚠️ **必须配置 `GITHUB_TOKEN`**:GitHub 渠道与 winget 渠道都调用 GitHub API,未认证限额仅 60 次/小时/IP——Cloudflare Workers 出口 IP 为多租户共享,实测会被其他租户直接耗尽(额度 0/60),表现为"GitHub API 速率受限"。配置后提升到 5000 次/小时。
+>
+> 💡 **Chocolatey 403 说明**:Chocolatey 的 WAF 会拦截部分云服务商出口 IP。本项目已改为读取 302 重定向里的版本号(极轻量)并补齐常规请求头;若仍被拦截,错误信息会提示改用 winget 渠道。
 >
 > 推送语义:手动刷新过的版本视为已知悉,定时任务不会重复推送;全部渠道发送失败时保留标记,下个周期自动重试。
 
