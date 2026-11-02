@@ -177,10 +177,14 @@ npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
    - **Expiration**:按需选择(建议 90 天,到期前更换)
    - **Repository access**:选 **Public Repositories (read-only)**
      > 这样即可覆盖任意公开仓库的 GitHub 渠道;若只关注自己的私有仓库,则选 **Only select repositories** 并勾上对应仓库
-3. **Permissions** → **Repository permissions** 只展开一项:
-   - **Contents** → 设为 **Read-only**
-     这是读取 Release / 仓库目录(winget 渠道)唯一需要的权限
-4. 其余权限**全部保持 No access**,点击 **Generate token**
+3. **Permissions** —— ⚠️ 注意页面有**两个不同的分组**,本项目只需要改 **Repository permissions**:
+   - 找到 **Repository permissions**(仓库权限,在下半部分,列表含 Actions / Administration / Checks / Contents …)
+   - 只改一项:**`Contents` → `Read-only`**
+     > 读取 Releases 与仓库目录(winget 渠道)都属于这一项,没有单独的 "Releases" 权限。
+   - `Metadata` 会自动被设为 `Read-only`,这是 GitHub 的强制要求,正常现象
+   - 其余全部保持 `No access`
+   - **`Account permissions`(账号权限)分组保持 0 项,不要添加任何权限** —— 那类权限与本项目无关
+4. 点击 **Generate token**
 5. 复制以 `github_pat_` 开头的令牌(只显示一次)
 
 **方式 B:Classic personal access token(兼容性最好)**
