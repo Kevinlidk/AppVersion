@@ -12,8 +12,8 @@
   - **Chocolatey 社区源**:优先读 `/api/v2/package/{id}` 的 302 重定向(约 165 字节,从 nupkg 文件名取版本),失败时回退 OData 查询
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
-- ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);支持按应用关闭推送、去重防骚扰
-- ✅ **更新提醒** —— 最新版本与当前版本不一致时,卡片高亮「有新版本」,支持一键「已更新」标记
+- ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
+- ✅ **更新提醒** —— 最新版本号以绿色显示;与当前版本不一致时卡片高亮「有新版本」,支持一键「已更新」标记
 - 🎁 **开箱示例** —— 首次访问自动内置「Google Chrome」示例应用(Chocolatey 渠道,可自动查询);登录后可编辑或删除,清空后不会重复注入
 - 🔐 **管理员登录** —— 右上角登录后才能添加/编辑/删除/刷新监控应用;访客默认只读,仅可查看页面信息
 - 📤 **配置导入 / 导出** —— 管理员可一键把全部关注应用导出为 JSON 配置文件备份,或导入配置文件恢复/迁移(导入覆盖当前列表,操作前有确认提示)
@@ -151,7 +151,7 @@ curl -X POST https://app-version.kevinlidk.cn/api/check -H "Authorization: Beare
 | `APP_KV`(KV 绑定) | ✅ | 应用列表存储。由环境变量 `KV_NAMESPACE_ID` 在部署前注入,无需手改配置 |
 | `ADMIN_PASSWORD` | ✅ | 管理员密码,编辑类接口的登录凭据(见「管理员与权限」) |
 | `CRON_SECRET` | ✅ | GitHub Actions 触发 `/api/check` 的令牌(见上一节) |
-| `GITHUB_TOKEN` | **强烈建议** | GitHub Personal Access Token。GitHub 与 winget 渠道共用;Worker 出口 IP 是多租户共享的,匿名额度(60 次/小时)**极易被其他租户耗尽**而导致刷新失败,配置后为 5000 次/小时 |
+| `GITHUB_TOKEN` | **强烈建议** | GitHub Personal Access Token,**只需 `public_repo`(Classic)或 Contents: Read-only(Fine-grained)只读权限**,创建步骤见下文。GitHub 与 winget 渠道共用;Worker 出口 IP 是多租户共享的,匿名额度(60 次/小时)**极易被其他租户耗尽**而导致刷新失败,配置后为 5000 次/小时 |
 | `FEISHU_WEBHOOK_URL` | 可选 | 飞书群自定义机器人 webhook 地址 |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | 可选 | Telegram Bot 发消息 |
 | `BARK_URL` | 可选 | Bark(iOS)设备推送地址,如 `https://api.day.app/yourkey` |
@@ -164,10 +164,43 @@ npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
 ```
 
 > ⚠️ **必须配置 `GITHUB_TOKEN`**:GitHub 渠道与 winget 渠道都调用 GitHub API,未认证限额仅 60 次/小时/IP——Cloudflare Workers 出口 IP 为多租户共享,实测会被其他租户直接耗尽(额度 0/60),表现为"GitHub API 速率受限"。配置后提升到 5000 次/小时。
->
+
+### 如何创建 `GITHUB_TOKEN`(含所需权限)
+
+本项目只**读取公开仓库**的 Release 与清单文件,因此采用 **Fine-grained token(推荐)或 Classic token** 均可,权限要求都极低。
+
+**方式 A:Fine-grained personal access token(推荐,权限更小)**
+
+1. GitHub → 右上角头像 → **Settings** → 左栏最底 **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**
+2. 填写:
+   - **Token name**:如 `app-version-worker`
+   - **Expiration**:按需选择(建议 90 天,到期前更换)
+   - **Repository access**:选 **Public Repositories (read-only)**
+     > 这样即可覆盖任意公开仓库的 GitHub 渠道;若只关注自己的私有仓库,则选 **Only select repositories** 并勾上对应仓库
+3. **Permissions** → **Repository permissions** 只展开一项:
+   - **Contents** → 设为 **Read-only**
+     这是读取 Release / 仓库目录(winget 渠道)唯一需要的权限
+4. 其余权限**全部保持 No access**,点击 **Generate token**
+5. 复制以 `github_pat_` 开头的令牌(只显示一次)
+
+**方式 B:Classic personal access token(兼容性最好)**
+
+1. 同上路径进入 **Personal access tokens** → **Tokens (classic)** → **Generate new token (classic)**
+2. **Scopes** 勾选:
+   - ✅ **`public_repo`** —— 读取公开仓库信息(本项目所需的最小范围)
+   - 仅关注私有仓库时,改为勾选 **`repo`**(范围更大,注意风险)
+3. **不要**勾选 `admin:*` / `delete_repo` / `workflow` 等任何其他权限
+4. 复制以 `ghp_` 开头的令牌
+
+> 🔐 说明与建议
+> - 本项目只做**只读**查询,不会写入、提交或修改任何 GitHub 内容;不配置也能跑,但会被匿名限额(60 次/小时)卡住。
+> - 令牌请只存到 **Worker 的 Secret**(`npx wrangler secret put GITHUB_TOKEN` 或 Dashboard「变量和机密」),**不要**写进代码、`wrangler.toml` 或提交到仓库。
+> - GitHub Actions 的定时任务用的是仓库内置 `GITHUB_TOKEN`(由 workflow 自动提供),**与此处无关、无需额外配置**。
+> - 令牌会过期:到期后刷新会重新出现"GitHub API 速率受限",届时重新生成并更新 Secret 即可。
+
 > 💡 **Chocolatey 403 说明**:Chocolatey 的 WAF 会拦截部分云服务商出口 IP。本项目已改为读取 302 重定向里的版本号(极轻量)并补齐常规请求头;若仍被拦截,错误信息会提示改用 winget 渠道。
 >
-> 推送语义:手动刷新过的版本视为已知悉,定时任务不会重复推送;全部渠道发送失败时保留标记,下个周期自动重试。
+> 推送语义:仅对**勾选了"发现新版本时推送通知"**的应用做定时检查与推送(新建应用默认不勾选);手动刷新过的版本视为已知悉,不会重复推送;全部渠道发送失败时保留标记,下个周期自动重试。
 
 ## 本地开发
 

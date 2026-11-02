@@ -224,7 +224,7 @@ await test("首次 GET 自动注入 Google Chrome 示例应用", async () => {
   if (!sample) throw new Error("示例应用缺失");
   assertEq(sample.channel, "chocolatey", "示例渠道");
   assertEq(sample.name, "Google Chrome", "示例名称");
-  assertEq(sample.notify, true, "通知默认开启");
+  assertEq(sample.notify, false, "推送通知默认关闭");
 });
 
 await test("POST 新增 GitHub 应用成功,字段归一化", async () => {
@@ -232,7 +232,7 @@ await test("POST 新增 GitHub 应用成功,字段归一化", async () => {
   assertEq(res.status, 201, "状态码");
   const app = await bodyOf(res);
   assertEq(app.repo, "foo/bar", "repo 归一化");
-  assertEq(app.notify, true, "notify 默认开启");
+  assertEq(app.notify, false, "notify 默认关闭");
   if (!app.id) throw new Error("缺少 id");
   assertEq((await bodyOf(await call("/api/apps"))).length, 2, "列表长度(示例+新增)");
 });
@@ -486,7 +486,7 @@ await test("POST /api/check:CRON_SECRET 触发检查并返回摘要", async () =
     headers: { "content-type": "application/json", ...extra },
     body: JSON.stringify(b),
   });
-  await worker.fetch(new Request("http://localhost/api/apps", jsonPost({ name: "检查应用", channel: "github", repo: "foo/bar", version: "v1.0.0" }, auth)), env5, ctx);
+  await worker.fetch(new Request("http://localhost/api/apps", jsonPost({ name: "检查应用", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true }, auth)), env5, ctx);
 
   const res = await worker.fetch(
     new Request("http://localhost/api/check", { method: "POST", headers: { authorization: "Bearer cron-abc" } }),
@@ -544,13 +544,13 @@ await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,noti
     return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), env2, ctx);
   };
   // A:GitHub 渠道,当前 v1.0.0 → 应推送
-  const a = await bodyOf(await call2("/api/apps", post({ name: "应用A", channel: "github", repo: "foo/bar", version: "v1.0.0" })));
+  const a = await bodyOf(await call2("/api/apps", post({ name: "应用A", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true })));
   // B:GitHub 渠道,关闭通知 → 不应推送
   await call2("/api/apps", post({ name: "应用B", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: false }));
   // C:GitHub 渠道,当前版本已是最新 → 不推送但更新检查时间
-  await call2("/api/apps", post({ name: "应用C", channel: "github", repo: "foo/bar", version: "v2.0.0" }));
+  await call2("/api/apps", post({ name: "应用C", channel: "github", repo: "foo/bar", version: "v2.0.0", notify: true }));
   // D:手动渠道 → 完全跳过
-  await call2("/api/apps", post({ name: "应用D", channel: "manual", version: "1.0.0" }));
+  await call2("/api/apps", post({ name: "应用D", channel: "manual", version: "1.0.0", notify: true }));
 
   await runScheduled(env2);
   assertEq(hookCalls.length, 1, "推送次数");
@@ -591,7 +591,7 @@ await test("scheduled:全部渠道发送失败时回滚标记,下次重试", asy
       headers.cookie = "av_session=" + ck3;
       return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), env3, ctx);
     };
-    await call3("/api/apps", post({ name: "应用E", channel: "github", repo: "foo/bar", version: "v1.0.0" }));
+    await call3("/api/apps", post({ name: "应用E", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true }));
     await runScheduled(env3);
     assertEq(hookCalls.length, 0, "发送失败不应记录调用");
     const list = await bodyOf(await call3("/api/apps"));

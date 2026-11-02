@@ -162,7 +162,8 @@
   .ver { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 10px 0 4px; }
   .ver-label { color: var(--muted); font-size: 12.5px; margin-right: 6px; }
   .ver b { font-size: 14.5px; overflow-wrap: anywhere; }
-  .ver b.new { color: var(--warn); }
+  /* 最新版本号统一用绿色显示(有新版本与否都保持绿色,更新状态由徽章表达) */
+  .ver b.latest { color: var(--ok); }
   .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
   .meta a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
   .meta a:active { opacity: .7; }
@@ -316,7 +317,7 @@
       <input name="note" maxlength="100" placeholder="可选">
     </label>
     <label class="check-row">
-      <input type="checkbox" id="notifyInput" checked>
+      <input type="checkbox" id="notifyInput">
       <span>发现新版本时推送通知(渠道配置见 README)</span>
     </label>
     <div class="dlg-actions">
@@ -487,7 +488,7 @@ function cardHtml(a) {
       <div class="card-top"><h3 class="app-name">${esc(a.name)}</h3>${badgeOf(a)}</div>
       <div class="ver">
         <div><span class="ver-label">${manual ? "版本" : "当前"}</span><b>${esc(a.version || "—")}</b></div>
-        ${!manual && a.latestVersion ? `<div><span class="ver-label">最新</span><b${st === "update" ? ' class="new"' : ""}>${esc(a.latestVersion)}</b></div>` : ""}
+        ${!manual && a.latestVersion ? `<div><span class="ver-label">最新</span><b class="latest">${esc(a.latestVersion)}</b></div>` : ""}
       </div>
       <div class="meta">${meta.join('<span aria-hidden="true">·</span>')}</div>
       ${a.note ? `<p class="note">${esc(a.note)}</p>` : ""}
@@ -638,7 +639,7 @@ function openDialog(app) {
   form.source.value = app ? (app.repo || app.packageId || "") : "";
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
-  $("#notifyInput").checked = app ? app.notify !== false : true;
+  $("#notifyInput").checked = app ? app.notify === true : false;
   syncChannelUi();
   dlg.showModal();
 }

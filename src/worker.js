@@ -255,8 +255,9 @@ function normalizeApp(input, base = {}) {
   out.packageId = packageId;
   if (input.version !== undefined) out.version = String(input.version).trim();
   if (input.note !== undefined) out.note = String(input.note).trim();
+  // 推送通知默认关闭:需在表单中主动勾选才会纳入定时检查与推送
   if (input.notify !== undefined) out.notify = Boolean(input.notify);
-  else if (out.notify === undefined) out.notify = true;
+  else if (out.notify === undefined) out.notify = false;
   return out;
 }
 
