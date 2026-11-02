@@ -163,7 +163,21 @@
     box-shadow: var(--shadow);
   }
   .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-  .app-name { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+  /* 应用图标:官方图标 / 缩写字母兜底 */
+  .app-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .app-icon {
+    flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px;
+    object-fit: contain; background: #fff;
+    border: 1px solid var(--border); padding: 3px;
+  }
+  .app-icon-fallback {
+    flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; letter-spacing: .3px;
+    color: #fff; background: var(--icon-bg, #2563eb);
+    user-select: none;
+  }
+  .app-name { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; min-width: 0; }
   .badge {
     flex-shrink: 0; font-size: 12px; font-weight: 600;
     padding: 3px 9px; border-radius: 999px;
@@ -339,6 +353,9 @@
     <label>备注
       <input name="note" maxlength="100" placeholder="可选">
     </label>
+    <label>图标地址(可选)
+      <input name="iconUrl" id="iconUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="留空则自动匹配官方图标,匹配不到用名称缩写">
+    </label>
     <label class="check-row">
       <input type="checkbox" id="notifyInput">
       <span>发现新版本时推送通知(渠道配置见 README)</span>
@@ -475,6 +492,83 @@ function badgeOf(a) {
   return "";
 }
 
+/**
+ * 推断应用官方图标地址(纯前端,失败时由 <img onerror> 回退到字母图标)。
+ * 可选来源,按可靠性排序:
+ *   1. 用户自定义 iconUrl(官方自查渠道可手填)
+ *   2. GitHub    → 仓库所有者头像(github.com/{owner}.png 会 302 到 avatars CDN)
+ *   3. Chocolatey→ 包图标 /content/packageimages/{id}.{版本}.png
+ * 其余渠道无可靠规律,直接使用字母图标。
+ */
+function iconCandidates(a) {
+  const list = [];
+  if (a.iconUrl) list.push(a.iconUrl);
+  if (a.channel === "github" && a.repo) {
+    const owner = a.repo.split("/")[0];
+    if (owner) list.push("https://github.com/" + encodeURIComponent(owner) + ".png?size=64");
+  }
+  if (a.channel === "chocolatey" && a.packageId) {
+    // 图标地址带版本号;优先用最新版本,未刷新时退回当前版本
+    const ver = a.latestVersion || a.version;
+    if (ver) {
+      list.push(
+        "https://community.chocolatey.org/content/packageimages/" +
+        encodeURIComponent(a.packageId.toLowerCase()) + "." +
+        encodeURIComponent(String(ver).replace(/^v/i, "")) + ".png"
+      );
+    }
+  }
+  return list;
+}
+
+/** 名称缩写:取英文单词首字母,最多 2 个;无拉丁字母时取首个字符 */
+function initialsOf(name) {
+  const s = String(name || "").trim();
+  const words = s.split(/[\s\-_.+]+/).filter(Boolean);
+  const letters = words
+    .map((w) => (w.match(/[A-Za-z0-9]/) || [""])[0])
+    .filter(Boolean);
+  if (letters.length >= 2) return (letters[0] + letters[1]).toUpperCase();
+  if (letters.length === 1) return letters[0].toUpperCase();
+  const cjk = s.match(/[\u4e00-\u9fa5\u3040-\u30ff]/);
+  return cjk ? cjk[0] : (s[0] || "?").toUpperCase();
+}
+
+/** 按名称生成稳定的兜底底色 */
+function iconBgOf(name) {
+  const palette = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#0891b2", "#059669", "#4f46e5", "#b45309"];
+  let h = 0;
+  for (const ch of String(name || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return palette[h % palette.length];
+}
+
+/** 图标 HTML:优先使用自定义图标地址,其次按渠道推断;失败则显示字母图标 */
+function iconHtml(a) {
+  const bg = iconBgOf(a.name);
+  const url = iconCandidates(a)[0] || "";
+  if (!url) return fallbackIconHtml(a);
+  // 加载失败由全局函数处理(内联 onerror 嵌套引号容易被 HTML 解析截断)
+  return `<img class="app-icon" src="${esc(url)}" alt="" loading="lazy" decoding="async" ` +
+    `referrerpolicy="no-referrer" data-icon-bg="${bg}" data-icon-text="${esc(initialsOf(a.name))}" ` +
+    `onerror="appVersionIconFallback(this)">`;
+}
+
+/** 字母图标 HTML */
+function fallbackIconHtml(a) {
+  return `<span class="app-icon-fallback" style="--icon-bg:${iconBgOf(a.name)}" ` +
+    `aria-hidden="true">${esc(initialsOf(a.name))}</span>`;
+}
+
+/** 图片加载失败:原地替换为字母图标(全局函数,供 img onerror 调用) */
+window.appVersionIconFallback = function (img) {
+  const span = document.createElement("span");
+  span.className = "app-icon-fallback";
+  span.setAttribute("aria-hidden", "true");
+  span.style.setProperty("--icon-bg", img.dataset.iconBg || "#2563eb");
+  span.textContent = img.dataset.iconText || "?";
+  if (img.parentNode) img.parentNode.replaceChild(span, img);
+};
+
 function sourceMeta(a) {
   if (a.channel === "github") {
     if (a.repo) return { label: a.repo, url: a.releaseUrl || "https://github.com/" + a.repo };
@@ -513,7 +607,13 @@ function cardHtml(a) {
       </div>` : "";
   return `
     <article class="card" data-id="${a.id}">
-      <div class="card-top"><h3 class="app-name">${esc(a.name)}</h3>${badgeOf(a)}</div>
+      <div class="card-top">
+        <div class="app-head">
+          ${iconHtml(a)}
+          <h3 class="app-name">${esc(a.name)}</h3>
+        </div>
+        ${badgeOf(a)}
+      </div>
       <div class="ver">
         <div><span class="ver-label">${manual ? "版本" : "当前"}</span><b>${esc(a.version || "—")}</b></div>
         ${!manual && a.latestVersion ? `<div><span class="ver-label">最新</span><b class="latest">${esc(a.latestVersion)}</b></div>` : ""}
@@ -675,6 +775,7 @@ function openDialog(app) {
   form.source.value = app ? (app.repo || app.packageId || "") : "";
   $("#officialUrlInput").value = app ? (app.officialUrl || "") : "";
   $("#jsonPathInput").value = app ? (app.jsonPath || "") : "";
+  $("#iconUrlInput").value = app ? (app.iconUrl || "") : "";
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
   $("#notifyInput").checked = app ? app.notify === true : false;
@@ -695,6 +796,7 @@ form.addEventListener("submit", async (e) => {
     channel: ch,
     version: form.version.value.trim(),
     note: form.note.value.trim(),
+    iconUrl: $("#iconUrlInput").value.trim(),
     notify: $("#notifyInput").checked,
   };
   if (ch === "github") payload.repo = source;

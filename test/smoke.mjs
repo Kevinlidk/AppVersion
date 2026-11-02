@@ -283,6 +283,26 @@ await test("POST refresh:GitHub 查询最新版本并更新记录", async () => 
   assertEq(app.notifiedVersion, "v2.0.0", "手动刷新后记录 notifiedVersion");
 });
 
+await test("iconUrl:可自定义图标地址,非 https 拒绝,留空则为空串", async () => {
+  const ok = await bodyOf(await call("/api/apps", post({
+    name: "带图标", channel: "manual", version: "1.0",
+    iconUrl: "https://cdn.example.com/icon.png",
+  })));
+  assertEq(ok.iconUrl, "https://cdn.example.com/icon.png", "自定义图标保留");
+
+  const noIcon = await bodyOf(await call("/api/apps", post({ name: "无图标", channel: "manual", version: "1.0" })));
+  assertEq(noIcon.iconUrl, "", "默认空串");
+
+  assertEq((await call("/api/apps", post({ name: "X", channel: "manual", iconUrl: "http://a/b.png" }))).status, 400, "http 拒绝");
+  assertEq((await call("/api/apps", post({ name: "X", channel: "manual", iconUrl: "not-a-url" }))).status, 400, "非法 URL");
+
+  const upd = await bodyOf(await call("/api/apps/" + ok.id, put({ iconUrl: "https://cdn.example.com/v2.png" })));
+  assertEq(upd.iconUrl, "https://cdn.example.com/v2.png", "更新图标");
+
+  await call("/api/apps/" + ok.id, { method: "DELETE" });
+  await call("/api/apps/" + noIcon.id, { method: "DELETE" });
+});
+
 await test("POST refresh:GitHub 无 latest Release 时回退到最近一条", async () => {
   ghMode = "notfound";
   const list = await bodyOf(await call("/api/apps"));

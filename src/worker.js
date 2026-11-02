@@ -242,6 +242,18 @@ function validateOfficialUrl(raw) {
   return u.href;
 }
 
+/** 校验自定义图标地址:公网 https 图片地址 */
+function validateIconUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new ApiError("图标地址格式不正确,应为完整 URL");
+  }
+  if (u.protocol !== "https:") throw new ApiError("图标地址必须使用 https://");
+  return u.href;
+}
+
 /** 校验版本字段路径:只允许 键名、数字索引、[字段=值] 三种片段 */
 function validateJsonPath(raw) {
   const path = String(raw || "").trim();
@@ -386,6 +398,13 @@ function normalizeApp(input, base = {}) {
   out.packageId = packageId;
   out.officialUrl = officialUrl;
   out.jsonPath = jsonPath;
+  // 可选自定义图标:留空则前端按渠道自动推断
+  if (input.iconUrl !== undefined) {
+    const raw = String(input.iconUrl).trim();
+    out.iconUrl = raw ? validateIconUrl(raw) : "";
+  } else if (out.iconUrl === undefined) {
+    out.iconUrl = "";
+  }
   if (input.version !== undefined) out.version = String(input.version).trim();
   if (input.note !== undefined) out.note = String(input.note).trim();
   // 推送通知默认关闭:需在表单中主动勾选才会纳入定时检查与推送
