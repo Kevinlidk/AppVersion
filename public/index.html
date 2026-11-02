@@ -183,12 +183,24 @@
   .group.drag-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
   .grp-toggle {
     display: flex; align-items: center; gap: 10px;
-    background: none; border: none; padding: 2px 0;
+    background: none; border: none;
+    /* 圆角内边距:悬停/点击时出现「选中圆框」高亮(与上一版一致) */
+    padding: 4px 8px; margin-left: -8px; border-radius: 8px;
     color: var(--text); font: inherit; font-weight: 600; font-size: 15px;
     cursor: pointer; text-align: left; min-width: 0;
+    transition: background .15s, transform .06s;
   }
-  .grp-toggle:not(.static):hover .grp-caret { color: var(--accent); }
-  .grp-toggle.static { cursor: default; }
+  /* 选中圆框:悬停/点击即出现淡蓝圆角底块 */
+  .grp-toggle:not(.static):hover,
+  .grp-toggle:not(.static):focus { background: var(--accent-weak); }
+  .grp-toggle:not(.static):hover .grp-caret,
+  .grp-toggle:not(.static):focus .grp-caret { color: var(--accent); }
+  .grp-toggle:not(.static):active {
+    transform: scale(.985);
+    background: var(--accent-weak);
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .grp-toggle.static { cursor: default; padding-left: 0; margin-left: 0; }
   /* 折叠箭头:大号人字形,展开朝下、折叠朝右 */
   .grp-caret {
     color: var(--muted); flex-shrink: 0;
