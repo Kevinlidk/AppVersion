@@ -30,6 +30,7 @@ const SESSION_COOKIE = "av_session";
 const SESSION_TTL = 604800; // 会话有效期:7 天
 const LOGIN_MAX_FAILS = 10; // 登录失败锁定阈值
 const LOGIN_LOCK_TTL = 900; // 锁定时长:15 分钟
+const CHECK_LOCK_KEY = "check:lock"; // 定时检查并发锁
 
 /** 业务类错误,携带 HTTP 状态码 */
 class ApiError extends Error {
@@ -132,6 +133,15 @@ async function requireAdmin(env, request) {
   if (!token || !(await kv(env).get("session:" + token))) {
     throw new ApiError("需要管理员登录", 401);
   }
+}
+
+/** /api/check 授权:CRON_SECRET Bearer 令牌(供 GitHub Actions)或管理员会话 */
+async function authorizedForCheck(env, request) {
+  if (env && env.CRON_SECRET) {
+    const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
+    if (token && (await safeEqual(token, env.CRON_SECRET))) return true;
+  }
+  return isAdminRequest(env, request);
 }
 
 /* ─────────────── KV 存取 ─────────────── */
@@ -433,6 +443,7 @@ async function sendNotifications(env, found) {
  * 定时检查全部自动渠道应用:
  * 逐个查询最新版本;与当前版本不同且尚未推送过(notifiedVersion)时,
  * 聚合成一条消息推送,成功后记录 notifiedVersion 防止重复推送。
+ * @returns {{checked:number,updated:number,notified:boolean,updates:object[],errors:object[]}}
  */
 async function runUpdateCheck(env) {
   const list = await readApps(env);
@@ -440,6 +451,7 @@ async function runUpdateCheck(env) {
   const gap = env.CHECK_GAP_MS !== undefined ? Number(env.CHECK_GAP_MS) : 500;
 
   const found = [];
+  const errors = [];
   for (const app of targets) {
     try {
       const latest = await fetchLatest(app, env);
@@ -452,16 +464,27 @@ async function runUpdateCheck(env) {
         found.push({ app, version: latest.version });
       }
     } catch (e) {
-      console.log(`[check] ${app.name}(${app.channel}): ${(e && e.message) || e}`);
+      const message = (e && e.message) || String(e);
+      errors.push({ name: app.name, channel: app.channel, error: message });
+      console.log(`[check] ${app.name}(${app.channel}): ${message}`);
     }
     if (gap > 0) await sleep(gap);
   }
 
+  let notified = false;
   if (found.length) {
-    const ok = await sendNotifications(env, found);
-    if (ok) for (const f of found) f.app.notifiedVersion = f.version;
+    notified = await sendNotifications(env, found);
+    if (notified) for (const f of found) f.app.notifiedVersion = f.version;
   }
   await writeApps(env, list);
+
+  return {
+    checked: targets.length,
+    updated: found.length,
+    notified,
+    updates: found.map((f) => ({ name: f.app.name, version: f.version })),
+    errors,
+  };
 }
 
 /* ─────────────── 路由 ─────────────── */
@@ -481,9 +504,13 @@ export default {
     }
   },
 
-  /** Cron Trigger 入口:定时检查更新并推送通知(服务端内部,不受登录态限制) */
+  /** Cron Trigger 入口(可选,当前默认未启用):定时检查更新并推送通知 */
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runUpdateCheck(env));
+    ctx.waitUntil(
+      runUpdateCheck(env).then((s) =>
+        console.log(`[cron] 检查 ${s.checked} 个,更新 ${s.updated} 个,推送 ${s.notified}`)
+      )
+    );
   },
 };
 
@@ -527,6 +554,25 @@ async function handleApi(request, env, pathname) {
     return json({ ok: true }, 200, {
       "set-cookie": `${SESSION_COOKIE}=; HttpOnly; Secure; Path=/; Max-Age=0; SameSite=Strict`,
     });
+  }
+
+  /* ── 定时检查触发(GitHub Actions 调用;也允许管理员会话手动触发)── */
+
+  if (pathname === "/api/check" && method === "POST") {
+    if (!(await authorizedForCheck(env, request))) {
+      throw new ApiError("需要有效的 CRON_SECRET 或管理员登录", 401);
+    }
+    const store = kv(env);
+    if (await store.get(CHECK_LOCK_KEY)) {
+      throw new ApiError("已有检查任务在执行中,请稍后重试", 409);
+    }
+    // 并发锁:防止 workflow 与手动触发重叠执行,异常时 5 分钟自动过期
+    await store.put(CHECK_LOCK_KEY, nowIso(), { expirationTtl: 300 });
+    try {
+      return json({ ok: true, ...(await runUpdateCheck(env)) });
+    } finally {
+      try { await store.delete(CHECK_LOCK_KEY); } catch { /* 释放失败交给 TTL */ }
+    }
   }
 
   /* ── 查看类接口(公开,访客只读)── */

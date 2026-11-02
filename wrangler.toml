@@ -19,11 +19,25 @@ binding = "ASSETS"
 # 未配置时所有编辑接口都会拒绝(页面保持只读),不会放行。
 
 # ── 定时检查更新 + 推送通知 ──────────────────────────────
-# Cron 为 UTC 时间(北京时间 = UTC + 8);当前为每 6 小时检查一次。
-# 如需调整频率改此处即可(如 "0 21 * * *" = 北京时间每天 05:00);
-# 注释掉整个 [triggers] 块可关闭定时推送(页面内手动刷新不受影响)。
-[triggers]
-crons = ["30 */6 * * *"]
+# 现由 GitHub Actions 驱动(.github/workflows/check-updates.yml),
+# 通过 HTTP 调用 POST /api/check,因此本文件不再声明 Cron Trigger
+# (Cloudflare 账号的 crons 名额已达上限)。
+#
+# 手动触发一次检查可在本地执行:
+#   curl -X POST https://app-version.kevinlidk.cn/api/check \
+#        -H "Authorization: Bearer $CRON_SECRET"
+#
+# 如日后 Cloudflare cron 名额空出、想改回平台定时任务,
+# 取消下面三行注释即可(并在 GitHub 仓库停用对应 workflow,
+# 两者同时启用会导致重复检查与重复推送):
+#
+# [triggers]
+# crons = ["30 */6 * * *"]
+
+# ── 定时检查令牌(本方案必配)──────────────────────────────
+# GitHub Actions 调用 POST /api/check 时需携带此令牌:
+#   npx wrangler secret put CRON_SECRET
+# 未配置时该接口只接受管理员会话,自动化调用会被拒绝。
 
 # ── KV 存储(必配)────────────────────────────────────────
 # 保存应用列表需要绑定一个 KV 命名空间,两种方式任选其一:

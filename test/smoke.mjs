@@ -415,6 +415,72 @@ await test("非 /api 路径回退到 ASSETS 绑定", async () => {
   assertEq(await bodyOf(res), "STATIC_OK", "静态回退");
 });
 
+await test("POST /api/check:无令牌且未登录 401;错误令牌 401", async () => {
+  const anon = await worker.fetch(new Request("http://localhost/api/check", { method: "POST" }), env, ctx);
+  assertEq(anon.status, 401, "无令牌状态码");
+  const wrong = await worker.fetch(
+    new Request("http://localhost/api/check", { method: "POST", headers: { authorization: "Bearer wrong-secret" } }),
+    env, ctx
+  );
+  assertEq(wrong.status, 401, "错误令牌状态码");
+});
+
+await test("POST /api/check:CRON_SECRET 触发检查并返回摘要", async () => {
+  const env5 = { APP_KV: makeKV(), ADMIN_PASSWORD: "p5", CRON_SECRET: "cron-abc", CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook" };
+  hookCalls.length = 0;
+  const { cookie } = await loginAs(env5, "p5");
+  const auth = { cookie: "av_session=" + cookie };
+  const jsonPost = (b, extra = {}) => ({
+    method: "POST",
+    headers: { "content-type": "application/json", ...extra },
+    body: JSON.stringify(b),
+  });
+  await worker.fetch(new Request("http://localhost/api/apps", jsonPost({ name: "检查应用", channel: "github", repo: "foo/bar", version: "v1.0.0" }, auth)), env5, ctx);
+
+  const res = await worker.fetch(
+    new Request("http://localhost/api/check", { method: "POST", headers: { authorization: "Bearer cron-abc" } }),
+    env5, ctx
+  );
+  assertEq(res.status, 200, "状态码");
+  const s = await bodyOf(res);
+  assertEq(s.ok, true, "ok 标记");
+  assertEq(s.checked, 1, "检查数量");
+  assertEq(s.updated, 1, "更新数量");
+  assertEq(s.updates[0].name, "检查应用", "更新条目");
+  assertEq(s.notified, true, "已推送");
+  assertEq(hookCalls.length, 1, "推送次数");
+
+  // 再次触发:已推送过,不应重复推送,但仍返回摘要
+  const again = await bodyOf(await worker.fetch(
+    new Request("http://localhost/api/check", { method: "POST", headers: { authorization: "Bearer cron-abc" } }),
+    env5, ctx
+  ));
+  assertEq(again.updated, 0, "二次检查无新更新");
+  assertEq(hookCalls.length, 1, "无重复推送");
+});
+
+await test("POST /api/check:已有任务执行中返回 409 并发锁", async () => {
+  const kv5 = makeKV();
+  const env6 = { APP_KV: kv5, ADMIN_PASSWORD: "p6", CRON_SECRET: "cron-abc", CHECK_GAP_MS: "0" };
+  await kv5.put("check:lock", "busy", { expirationTtl: 300 });
+  const res = await worker.fetch(
+    new Request("http://localhost/api/check", { method: "POST", headers: { authorization: "Bearer cron-abc" } }),
+    env6, ctx
+  );
+  assertEq(res.status, 409, "状态码");
+  if (!/执行中/.test((await bodyOf(res)).error)) throw new Error("提示文案不符");
+});
+
+await test("POST /api/check:管理员会话也可触发(备用通道)", async () => {
+  const env7 = { APP_KV: makeKV(), ADMIN_PASSWORD: "p7", CHECK_GAP_MS: "0" };
+  const { cookie } = await loginAs(env7, "p7");
+  const res = await worker.fetch(
+    new Request("http://localhost/api/check", { method: "POST", headers: { cookie: "av_session=" + cookie } }),
+    env7, ctx
+  );
+  assertEq(res.status, 200, "状态码");
+});
+
 /* ── 定时检查 + 通知推送(服务端内部,不受登录态限制)── */
 
 await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,notify:false 跳过", async () => {

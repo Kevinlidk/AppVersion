@@ -21,10 +21,12 @@ const PUBLIC = path.resolve(ROOT, "../public");
 const kvStore = new Map();
 const NOTIFY_URL = "http://127.0.0.1:" + PORT + "/__notify";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const CRON_SECRET = process.env.CRON_SECRET || "dev-cron-secret";
 const env = {
   NOTIFY_WEBHOOK_URL: NOTIFY_URL,
   CHECK_GAP_MS: "10",
   ADMIN_PASSWORD,
+  CRON_SECRET,
   APP_KV: {
     async get(k) { return kvStore.has(k) ? kvStore.get(k) : null; },
     async put(k, v) { kvStore.set(k, String(v)); },

@@ -1,0 +1,78 @@
+# 定时检查应用更新(替代 Cloudflare Cron Trigger)
+#
+# 为什么用 GitHub Actions:Cloudflare 账号的 Cron 名额已达上限,
+# 因此改由 GitHub 的定时任务通过 HTTP 触发 Worker 的 /api/check。
+#
+# 需要配置的仓库密钥(Settings → Secrets and variables → Actions):
+#   APP_VERSION_URL   Worker 线上地址,如 https://app-version.kevinlidk.cn
+#   CRON_SECRET       与 Worker 端 `wrangler secret put CRON_SECRET` 相同的值
+#
+# 注意:GitHub 的 schedule 使用 UTC 时间,且在高峰期可能延迟数分钟到数十分钟;
+# 对本项目"每 6 小时检查一次"的场景完全够用。
+# 仓库连续 60 天无提交时,GitHub 会自动暂停定时任务(届时到 Actions 页面点启用即可)。
+
+name: Check app updates
+
+on:
+  schedule:
+    # 每 6 小时一次(UTC 00:30 / 06:30 / 12:30 / 18:30)
+    - cron: "30 */6 * * *"
+  workflow_dispatch: # 支持在 Actions 页面手动运行
+
+# 同一时刻只跑一个实例,避免重叠触发造成重复检查
+concurrency:
+  group: check-app-updates
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 调用 Worker 检查更新
+        env:
+          APP_VERSION_URL: ${{ secrets.APP_VERSION_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_VERSION_URL:-}" ]; then
+            echo "::error::缺少仓库密钥 APP_VERSION_URL(如 https://app-version.kevinlidk.cn)"
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::缺少仓库密钥 CRON_SECRET(需与 Worker 端 secret 一致)"
+            exit 1
+          fi
+
+          url="${APP_VERSION_URL%/}/api/check"
+          echo "POST $url"
+
+          # --fail-with-body: 非 2xx 时让步骤失败,同时保留响应体便于排查
+          http_code=$(curl -sS --fail-with-body -m 120 -o response.json -w "%{http_code}" \
+            -X POST "$url" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            --retry 3 --retry-delay 5 --retry-connrefused) || {
+              code=$?
+              echo "::error::调用失败(curl 退出码 $code)"
+              cat response.json 2>/dev/null || true
+              exit 1
+            }
+
+          echo "HTTP $http_code"
+          cat response.json
+          echo
+
+          # 把摘要写入 job summary,便于在 Actions 页面直接查看
+          {
+            echo "## 应用更新检查结果"
+            echo
+            echo '```json'
+            cat response.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
