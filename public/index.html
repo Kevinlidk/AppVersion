@@ -145,6 +145,20 @@
   }
   .chip.active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
   .stats { font-size: 13px; margin-top: 12px; min-height: 1.2em; }
+  /* 统计里的「N 个有更新」:可点击的筛选按钮 */
+  .link-btn {
+    font: inherit; color: var(--accent); background: none; border: none;
+    padding: 2px 4px; margin: 0 1px; border-radius: 6px;
+    cursor: pointer; font-weight: 600; text-decoration: underline;
+    text-underline-offset: 2px; transition: background .15s;
+  }
+  .link-btn:hover { background: var(--accent-weak); }
+  .link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .link-btn.active {
+    background: var(--accent-weak); border: 1px solid var(--accent);
+    text-decoration: none; padding: 1px 7px;
+  }
+  .no-match { font-size: 13px; margin-top: 10px; color: var(--on-canvas); }
   /* 以下文本直接压在动态背景上,颜色随主题切换(卡片内不受影响) */
   .stats, .empty, .footer { color: var(--on-canvas); }
   .footer a { color: var(--link-on-canvas); }
@@ -304,6 +318,10 @@
   </div>
 
   <div id="stats" class="stats"></div>
+  <div id="noMatchHint" class="no-match hidden">
+    没有符合当前筛选条件的应用
+    <button type="button" id="clearFilterBtn" class="link-btn">清除筛选</button>
+  </div>
   <div id="manageRow" class="manage hidden">
     <button id="exportBtn" class="btn">⬇ 导出配置</button>
     <button id="importBtn" class="btn">⬆ 导入配置</button>
@@ -407,7 +425,7 @@
 const $ = (s) => document.querySelector(s);
 const listEl = $("#list");
 let apps = [];
-let filter = { q: "", channel: "all" };
+let filter = { q: "", channel: "all", updatesOnly: false };
 let editingId = null;
 let isAdmin = false;
 let authConfigured = false;
@@ -628,15 +646,28 @@ function render() {
   const q = filter.q.trim().toLowerCase();
   const shown = apps.filter((a) => {
     if (filter.channel !== "all" && a.channel !== filter.channel) return false;
+    if (filter.updatesOnly && statusOf(a) !== "update") return false;
     if (!q) return true;
     return [a.name, a.repo, a.packageId, a.officialUrl, a.note].some((v) => (v || "").toLowerCase().includes(q));
   });
   const updateCount = apps.filter((a) => statusOf(a) === "update").length;
-  $("#stats").textContent = apps.length
-    ? "共 " + apps.length + " 个应用" + (updateCount ? ",其中 " + updateCount + " 个有更新" : "")
-    : "";
+  // 「N 个有更新」做成可点击按钮:点击只看有更新的应用,再次点击取消筛选
+  if (!apps.length) {
+    $("#stats").innerHTML = "";
+  } else {
+    $("#stats").innerHTML =
+      "共 " + apps.length + " 个应用" +
+      (updateCount
+        ? ",其中 <button type=\"button\" id=\"updateFilterBtn\" class=\"link-btn" +
+          (filter.updatesOnly ? " active" : "") + "\" aria-pressed=\"" + (filter.updatesOnly ? "true" : "false") +
+          "\" title=\"" + (filter.updatesOnly ? "显示全部应用" : "只看有更新的应用") + "\">" +
+          updateCount + " 个有更新" + (filter.updatesOnly ? " ✕" : "") + "</button>"
+        : "");
+  }
   listEl.innerHTML = shown.map(cardHtml).join("");
   $("#emptyState").classList.toggle("hidden", apps.length > 0);
+  // 有数据但被筛选条件过滤空了,给出提示(否则页面看起来像没有应用)
+  $("#noMatchHint").classList.toggle("hidden", !(apps.length > 0 && shown.length === 0));
 }
 
 async function load() {
@@ -977,6 +1008,23 @@ listEl.addEventListener("click", (e) => {
 });
 
 $("#searchInput").addEventListener("input", (e) => { filter.q = e.target.value; render(); });
+
+// 「N 个有更新」按钮用事件委托(stats 每次 render 都会重建)
+$("#stats").addEventListener("click", (e) => {
+  const btn = e.target.closest("#updateFilterBtn");
+  if (!btn) return;
+  filter.updatesOnly = !filter.updatesOnly;
+  render();
+});
+
+$("#clearFilterBtn").addEventListener("click", () => {
+  filter = { q: "", channel: "all", updatesOnly: false };
+  $("#searchInput").value = "";
+  document.querySelectorAll("#channelChips .chip").forEach((c) => {
+    c.classList.toggle("active", c.dataset.channel === "all");
+  });
+  render();
+});
 
 $("#channelChips").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");
