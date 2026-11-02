@@ -35,6 +35,8 @@
     --icon-bg: #ffffff;
     --toast-bg: #101828;
     --toast-text: #ffffff;
+    --scrollbar-thumb: #d0d5dd;
+    --scrollbar-thumb-hover: #98a2b3;
 
     /* 浅色显示(默认):浅底 + 中灰字形,动效参数与深色完全一致 */
     --page-bg: #f4f6fb;
@@ -63,6 +65,8 @@
     --icon-bg: #2f3237;
     --toast-bg: #e8eaee;
     --toast-text: #1a1d23;
+    --scrollbar-thumb: #565b63;
+    --scrollbar-thumb-hover: #6f757e;
 
     --bg-ink: #8a93a0;
     --haze: linear-gradient(rgba(255, 255, 255, .10), rgba(255, 255, 255, .04));
@@ -70,6 +74,16 @@
     --link-on-canvas: #93c5fd;
   }
   * { box-sizing: border-box; }
+  /* 滚动条主题化:浅色浅灰、深色深灰(WebKit + Firefox 两套写法) */
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb); border-radius: 999px;
+    border: 2px solid transparent; background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: padding-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
   html {
     -webkit-text-size-adjust: 100%;
     background: var(--page-bg);
