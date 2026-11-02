@@ -26,9 +26,14 @@
 - 🎁 **开箱示例** —— 首次访问自动内置「Google Chrome」示例应用(Chocolatey 渠道,可自动查询);登录后可编辑或删除,清空后不会重复注入
 - 🖼 **应用图标** —— 按优先级自动匹配:
   1. 表单里手填的「图标地址」(自定义)
-  2. **按应用名称自动匹配 [selfhst 图标集](https://github.com/selfhst/icons)**(与 [YesIcon](https://yesicon.app/) 同源的 7000+ 彩色应用图标,经 Iconify 公共 API 提供,无需本地存储)
+  2. **按应用名称在多个 Iconify 图标集中级联匹配**(数据源与 [icon-sets.iconify.design](https://icon-sets.iconify.design/) / [yesicon.app](https://yesicon.app/) 同源,无需本地存储):
+     - `selfhst` —— 自托管应用图标集,7000+ 全彩图标,覆盖最广
+     - `logos` —— 品牌 logo 集,多色渐变
+     - `thesvg-color` —— 彩色 SVG 集,补齐 selfhst 未收录的应用(如 VLC)
+     - `cib` —— 单色品牌图标,自动着色兜底
   3. GitHub 渠道取仓库所有者头像;Chocolatey 渠道取包图标
-  - 名称会自动转成 kebab-case 匹配(`Google Chrome` → `google-chrome`),并支持去掉通用后缀(`Telegram Desktop` → `telegram`);多候选逐个尝试
+  - 名称自动转 kebab-case 匹配(`Google Chrome` → `google-chrome`),并支持去掉通用后缀(`Telegram Desktop` → `telegram`);不会过度收缩(避免 `Microsoft .NET` 误匹配成 `microsoft`)
+  - **并行探测**全部候选后只渲染命中的那个,不会出现长时间破图
   - 全部匹配不到时,回退为**名称英文缩写**的彩色字母图标(如 `GC`、`7Z`;中文取首字),底色按名称稳定生成
 - 🔐 **管理员登录** —— 右上角登录后才能添加/编辑/删除/刷新监控应用;访客默认只读,仅可查看页面信息
 - 📤 **配置导入 / 导出** —— 管理员可一键把全部关注应用导出为 JSON 配置文件备份,或导入配置文件恢复/迁移(导入覆盖当前列表,操作前有确认提示)

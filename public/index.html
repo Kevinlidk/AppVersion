@@ -263,6 +263,8 @@
   .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   /* 应用图标:官方图标 / 缩写字母兜底 */
   .app-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  /* 图标占位槽:解析前显示字母,解析成功后替换为 <img> */
+  .app-icon-slot { display: inline-flex; flex: 0 0 32px; width: 32px; height: 32px; }
   .app-icon {
     flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px;
     object-fit: contain; background: #fff;
@@ -629,7 +631,7 @@ function slugifyName(name) {
 }
 
 /**
- * 由应用名称推导 selfhst(YesIcon 同源图标集) 的候选 slug。
+ * 由应用名称推导候选 slug。
  * 只做保守收缩:仅当名称以通用后缀结尾时才尝试去掉后缀,
  * 避免「Microsoft .NET」被误匹配成「microsoft」这类泛化结果。
  */
@@ -637,6 +639,7 @@ function selfhstSlugs(name) {
   const base = slugifyName(name);
   if (!base) return [];
   const out = [base];
+  // 注意:这些是「缩略语」形式,不是完整单词比对的通用后缀
   const suffixWords = new Set([
     "desktop", "app", "client", "player", "tool", "runtime", "sdk",
     "server", "for", "windows", "media", "the",
@@ -650,16 +653,43 @@ function selfhstSlugs(name) {
     if (!cut || !suffixWords.has(dropped)) break;
     if (!out.includes(cut)) out.push(cut);
   }
+  // VLC media player → vlc-media-player / vlc-media / vlc
   return out;
 }
+
+/**
+ * 多图标集级联候选(按覆盖广度与彩色程度排序)。
+ * 全部来自 icon-sets.iconify.design 背后的 Iconify 公共 API,
+ * 前端逐个尝试,某个集没有该图标(404)会自动落到下一个集。
+ *   selfhst       自托管应用图标集(7000+,全彩,覆盖最广)
+ *   logos         品牌 logo 集(多色渐变,适合大厂应用)
+ *   thesvg-color  彩色 SVG 集(互补 selfhst 未收录的应用)
+ *   cib           单色品牌图标(用 ?color= 着色,最后兜底)
+ */
+const ICON_SETS = [
+  { prefix: "selfhst", colorize: false },
+  { prefix: "logos", colorize: false },
+  { prefix: "thesvg-color", colorize: false },
+  { prefix: "cib", colorize: true },
+];
+
+/** 单色图标集统一着色的颜色(取自 --muted 同色系) */
+const ICON_TINT = "%23667085";
 
 function iconCandidates(a) {
   const list = [];
   if (a.iconUrl) list.push(a.iconUrl);
-  // 1) 按名称自动匹配 selfhst 图标集(YesIcon 同源,7000+ 自托管应用图标)
-  //    多个候选全部加入,前一个 404 时自动试下一个
-  for (const slug of selfhstSlugs(a.name)) {
-    list.push("https://api.iconify.design/selfhst/" + encodeURIComponent(slug) + ".svg");
+  const slugs = selfhstSlugs(a.name);
+  // 按集轮询:每个图标集把全部 slug 试完后,再进入下一个集。
+  // 这样即使某个集完全没收录(vlc),也能落到收录更全的下一个集。
+  for (const set of ICON_SETS) {
+    for (const slug of slugs) {
+      const q = set.colorize ? "?color=" + ICON_TINT : "";
+      list.push(
+        "https://api.iconify.design/" + set.prefix + "/" +
+        encodeURIComponent(slug) + ".svg" + q
+      );
+    }
   }
   // 2) 渠道推断
   if (a.channel === "github" && a.repo) {
@@ -702,37 +732,67 @@ function iconBgOf(name) {
 }
 
 /** 图标 HTML:优先使用自定义图标地址,其次按渠道推断;失败则显示字母图标 */
-/** 图标 HTML:按候选顺序加载,失败自动换下一个,全部失败才用字母图标 */
+/**
+ * 图标解析缓存:名称 → 可用的图标地址(或 "" 表示无可用图标)。
+ * 并行探测候选,只渲染最终选中的那个,避免逐个 404 造成长时间破图。
+ */
+const iconResolveCache = new Map();
+
+/** 并行探测:返回第一个能成功加载的候选地址,全部失败返回 "" */
+function resolveIcon(name, urls) {
+  if (iconResolveCache.has(name)) return iconResolveCache.get(name);
+  const probe = (u) => new Promise((resolve) => {
+    const im = new Image();
+    im.referrerPolicy = "no-referrer";
+    const done = (ok) => { im.onload = im.onerror = null; resolve(ok ? u : ""); };
+    im.onload = () => done(im.naturalWidth > 0);
+    im.onerror = () => done(false);
+    setTimeout(() => done(false), 8000);
+    im.src = u;
+  });
+  const p = urls.length
+    ? Promise.all(urls.map(probe)).then((rs) => rs.find(Boolean) || "")
+    : Promise.resolve("");
+  iconResolveCache.set(name, p);
+  return p;
+}
+
+/** 图标 HTML:先用占位(字母),异步解析出可用图标后再替换,避免破图闪烁 */
 function iconHtml(a) {
   const bg = iconBgOf(a.name);
   const urls = iconCandidates(a).filter(Boolean);
-  if (!urls.length) return fallbackIconHtml(a);
-  // 候选地址存入 data 属性(用 | 分隔;图标 URL 本身不含 |)
-  const isSvg = /\.svg(\?|$)/i.test(urls[0]);
-  return `<img class="app-icon${isSvg ? " is-svg" : ""}" src="${esc(urls[0])}" alt="" loading="lazy" decoding="async" ` +
-    `referrerpolicy="no-referrer" data-icon-bg="${bg}" data-icon-text="${esc(initialsOf(a.name))}" ` +
-    `data-icon-alt="${esc(urls.slice(1).join("|"))}" ` +
-    `onerror="appVersionIconFallback(this)">`;
+  const initials = esc(initialsOf(a.name));
+  const placeholder =
+    `<span class="app-icon-fallback" style="--icon-bg:${bg}" aria-hidden="true">${initials}</span>`;
+  if (!urls.length) return placeholder;
+  // 先渲染字母占位,解析成功后由渲染层替换为 <img>
+  const key = esc(a.id || a.name);
+  queueMicrotask(() => hydrateIcon(key, urls, bg, initials, a.name));
+  return `<span class="app-icon-slot" data-icon-id="${key}">${placeholder}</span>`;
 }
 
-/** 字母图标 HTML */
-function fallbackIconHtml(a) {
-  return `<span class="app-icon-fallback" style="--icon-bg:${iconBgOf(a.name)}" ` +
-    `aria-hidden="true">${esc(initialsOf(a.name))}</span>`;
+/** 解析完成后把占位替换成图标(失败则保持字母) */
+async function hydrateIcon(id, urls, bg, initials, name) {
+  const url = await resolveIcon(name, urls);
+  if (!url) return;
+  document.querySelectorAll(`.app-icon-slot[data-icon-id="${CSS.escape(id)}"]`).forEach((slot) => {
+    if (!slot.isConnected) return;
+    const img = document.createElement("img");
+    img.className = "app-icon" + (/\.svg(\?|$)/i.test(url) ? " is-svg" : "");
+    img.src = url;
+    img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.dataset.iconBg = bg;
+    img.dataset.iconText = initials;
+    img.onerror = () => appVersionIconFallback(img);
+    slot.replaceChildren(img);
+  });
 }
 
-/** 图片加载失败:先试候选列表的下一个,全部失败才换成字母图标 */
+/** 图片加载失败:直接换成字母图标(并行探测已保证选中的是可用地址) */
 window.appVersionIconFallback = function (img) {
-  if (img.dataset.iconTried === undefined) img.dataset.iconTried = "0";
-  const alt = (img.dataset.iconAlt || "").split("|").filter(Boolean);
-  const tried = Number(img.dataset.iconTried);
-  if (tried < alt.length) {
-    img.dataset.iconTried = String(tried + 1);
-    const next = alt[tried];
-    img.classList.toggle("is-svg", /\.svg(\?|$)/i.test(next));
-    img.src = next;
-    return;
-  }
   const span = document.createElement("span");
   span.className = "app-icon-fallback";
   span.setAttribute("aria-hidden", "true");
