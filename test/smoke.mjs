@@ -597,6 +597,61 @@ await test("detect-links:Chocolatey/winget 渠道可推导页面地址;未登录
   assertEq(w.source, "winget", "winget 来源");
 });
 
+/* ── A1/A3/A4 修复与 A2 同步验证 ── */
+
+await test("A1: 导入 v1 旧备份(无 groups 字段)不再清空现有分组", async () => {
+  // 建一个分组 + 一个归组应用
+  const g = await bodyOf(await call("/api/groups", post({ name: "保留组" })));
+  const a = await bodyOf(await call("/api/apps", post({ name: "归组应用", channel: "manual", groupId: g.id })));
+
+  // 模拟 v1 备份:只有 apps,没有 groups 字段
+  const v1 = { format: "app-version-backup", version: 1, apps: [{ name: "旧备份应用", channel: "manual", version: "1.0" }] };
+  const imp = await bodyOf(await call("/api/apps/import", post(v1)));
+  assertEq(imp.groups, 0, "未导入分组");
+  assertEq(imp.imported, 1, "导入应用数");
+
+  // 关键断言:现有分组仍然存在
+  const groups = await bodyOf(await call("/api/groups"));
+  assertEq(groups.some((x) => x.id === g.id), true, "分组未被清空");
+  // 归组应用的分组关联也被保留(应用列表整体被覆盖,但该应用重新导入后归组关系在 v1 里本就没有)
+  assertEq(groups.length, 1, "分组数量不变");
+
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+  await call("/api/groups/" + g.id, { method: "DELETE" });
+});
+
+await test("A3: POST /api/apps 服务端自动分配 order(追加到末尾)", async () => {
+  const a1 = await bodyOf(await call("/api/apps", post({ name: "顺序1", channel: "manual" })));
+  const a2 = await bodyOf(await call("/api/apps", post({ name: "顺序2", channel: "manual" })));
+  if (!(a2.order > a1.order)) throw new Error(`order 未递增: ${a1.order} → ${a2.order}`);
+  await call("/api/apps/" + a1.id, { method: "DELETE" });
+  await call("/api/apps/" + a2.id, { method: "DELETE" });
+});
+
+await test("A4: 应用名称超过 100 字符时服务端拒绝", async () => {
+  const res = await call("/api/apps", post({ name: "A".repeat(101), channel: "manual" }));
+  assertEq(res.status, 400, "状态码");
+  if (!/100/.test((await bodyOf(res)).error)) throw new Error("提示未包含上限");
+  const ok = await call("/api/apps", post({ name: "A".repeat(100), channel: "manual" }));
+  assertEq(ok.status, 201, "100 字恰好可通过");
+  const list = await bodyOf(await call("/api/apps"));
+  await call("/api/apps/" + list[0].id, { method: "DELETE" });
+});
+
+await test("A2: refresh 同步更新 downloads 候选列表", async () => {
+  // 构造一个带资产的 Release,刷新后 downloads 应该被写入
+  ghAssets = ["app-x64.exe", "app-x64.msi", "checksums.txt"];
+  const a = await bodyOf(await call("/api/apps", post({ name: "同步候选", channel: "github", repo: "foo/bar" })));
+  const r = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(r.status, 200, "刷新状态码");
+  const app = await bodyOf(r);
+  assertEq(Array.isArray(app.downloads), true, "downloads 已写入");
+  assertEq(app.downloads.length, 2, "候选数量(跳过校验文件)");
+  assertEq(app.downloads[0].name, "app-x64.exe", "首选资产");
+  ghAssets = null;
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
 /* ── 分组与布局 ── */
 
 await test("分组:创建/重命名/删除,删除后组内应用回到未分组", async () => {
@@ -694,8 +749,8 @@ await test("导出/导入包含分组:备份可完整还原", async () => {
 });
 
 await test("DELETE 删除应用成功", async () => {
-  const list = await bodyOf(await call("/api/apps"));
-  const target = list.find((a) => a.name === "VLC (winget)");
+  // A1 的导入测试会整体覆盖列表,这里自建应用保证确定性
+  const target = await bodyOf(await call("/api/apps", post({ name: "待删除", channel: "manual", version: "1.0" })));
   const res = await call("/api/apps/" + target.id, { method: "DELETE" });
   assertEq(res.status, 200, "状态码");
   const rest = await bodyOf(await call("/api/apps"));

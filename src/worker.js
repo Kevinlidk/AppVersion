@@ -425,6 +425,8 @@ function normalizeApp(input, base = {}) {
 
   const name = String(input.name ?? out.name ?? "").trim();
   if (!name) throw new ApiError("应用名称不能为空");
+  // 服务端同样限长(表单 maxlength=50 仅前端约束)
+  if (name.length > 100) throw new ApiError("应用名称不能超过 100 个字符");
 
   const channel = input.channel ?? out.channel ?? "manual";
   if (!["github", "chocolatey", "winget", "official", "manual"].includes(channel)) {
@@ -573,6 +575,8 @@ async function fetchGitHubLatest(repo, env) {
     version: String(r.tag_name || "").trim(),
     releaseUrl: r.html_url || null,
     publishedAt: r.published_at || null,
+    // 附带按分数排序的安装包候选,刷新时同步更新下载菜单
+    downloads: rankDownloadAssets(r.assets),
   });
 
   const base = `https://api.github.com/repos/${repo}`;
@@ -836,6 +840,8 @@ function applyLatest(app, latest) {
   app.releaseUrl = latest.releaseUrl;
   app.publishedAt = latest.publishedAt;
   app.lastCheckedAt = nowIso();
+  // GitHub 渠道的刷新会附带最新 Release 的安装包候选,同步更新下载菜单
+  if (Array.isArray(latest.downloads)) app.downloads = latest.downloads;
 }
 
 /* ─────────────── 通知推送 ─────────────── */
@@ -1066,6 +1072,8 @@ async function handleApi(request, env, pathname) {
     app.id = crypto.randomUUID();
     app.createdAt = nowIso();
     const list = await readApps(env);
+    // 追加到其所属分组(或未分组)的末尾
+    app.order = nextOrder(list);
     list.unshift(app);
     await writeApps(env, list);
     return json(app, 201);
@@ -1207,10 +1215,12 @@ async function handleApi(request, env, pathname) {
     }
     if (records.length > 500) throw new ApiError("单次导入最多 500 条记录");
 
-    // 分组:备份里有就一并恢复(校验后重新分配 id 映射,避免与现有冲突)
-    const importedGroups = [];
+    // 分组:仅当导入文件里带 groups 数组时才覆盖分组。
+    // 导入 v1 旧备份(无 groups 字段)不应清空现有分组。
+    let importedGroups = null;
     if (Array.isArray(body.groups)) {
       if (body.groups.length > 200) throw new ApiError("单次导入最多 200 个分组");
+      importedGroups = [];
       body.groups.forEach((grp, i) => {
         if (!grp || typeof grp !== "object") return;
         try {
@@ -1226,22 +1236,22 @@ async function handleApi(request, env, pathname) {
         }
       });
     }
-    const validGroupIds = new Set(importedGroups.map((x) => x.id));
+    const validGroupIds = importedGroups ? new Set(importedGroups.map((x) => x.id)) : null;
 
     const list = [];
     records.forEach((rec, i) => {
       try {
         const app = normalizeImportedApp(rec);
         // 分组引用必须存在于本次导入的分组中,否则归为未分组
-        if (app.groupId && !validGroupIds.has(app.groupId)) app.groupId = null;
+        if (app.groupId && (!validGroupIds || !validGroupIds.has(app.groupId))) app.groupId = null;
         list.push(app);
       } catch (e) {
         throw new ApiError(`第 ${i + 1} 条记录无效:${e.message}`, e instanceof ApiError ? e.status : 400);
       }
     });
     await writeApps(env, list);
-    await writeGroups(env, importedGroups);
-    return json({ ok: true, imported: list.length, groups: importedGroups.length });
+    if (importedGroups) await writeGroups(env, importedGroups);
+    return json({ ok: true, imported: list.length, groups: importedGroups ? importedGroups.length : 0 });
   }
 
   /* ── 分组(查看公开,编辑需管理员)── */

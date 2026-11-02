@@ -647,6 +647,19 @@
   </form>
 </dialog>
 
+<dialog id="groupDialog">
+  <form id="groupForm" novalidate>
+    <h2 id="groupDlgTitle">新建分组</h2>
+    <label>分组名称
+      <input name="gname" id="groupNameInput" maxlength="40" autocomplete="off" placeholder="如:浏览器、开发工具">
+    </label>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="groupCancelBtn">取消</button>
+      <button type="submit" class="btn primary" id="groupSaveBtn">保存</button>
+    </div>
+  </form>
+</dialog>
+
 <footer class="footer">
   AppVersion · 运行于 Cloudflare Workers ·
   <a href="https://github.com/Kevinlidk/AppVersion" target="_blank" rel="noopener">GitHub 仓库</a>
@@ -1088,17 +1101,21 @@ function groupSectionHtml(group, list, shownIds) {
   const title = group ? esc(group.name) : "未分组";
   const stats = `<span class="grp-count">${count}</span>` +
     (updateCount ? `<span class="grp-updates">${updateCount} 个待更新</span>` : "");
+  // B1: 从未创建过分组时,「未分组」区不显示标题,保持纯卡片观感
   const headerInner = group
     ? `<button type="button" class="grp-toggle" data-gid="${group.id}" aria-expanded="${!collapsed}" title="${collapsed ? "展开" : "折叠"}">
          <span class="grp-caret">${caretSvg(collapsed)}</span>
          <span class="grp-name">${title}</span>
          ${stats}
        </button>`
-    : `<span class="grp-toggle static">
-         <span class="grp-caret">${caretSvg(false)}</span>
-         <span class="grp-name">${title}</span>
-         ${stats}
-       </span>`;
+    : (groups.length || editMode)
+      ? `<span class="grp-toggle static">
+           <span class="grp-caret">${caretSvg(false)}</span>
+           <span class="grp-name">${title}</span>
+           ${stats}
+         </span>`
+      : "";
+  const showHeader = group || (groups.length || editMode);
   const groupActions = (editMode && group)
     ? `<span class="grp-actions">
          <button type="button" class="btn tiny grp-rename" data-gid="${group.id}">重命名</button>
@@ -1108,14 +1125,17 @@ function groupSectionHtml(group, list, shownIds) {
        </span>`
     : "";
 
-  return `
-    <section class="group${collapsed ? " collapsed" : ""}${group ? "" : " ungrouped"}"
-             data-gid="${group ? group.id : ""}"${group ? ` draggable="${editMode}"` : ""}>
-      <header class="group-head">
+  const headBlock = showHeader
+    ? `<header class="group-head">
         <span class="grp-drag" ${(group && editMode) ? "" : "hidden"} title="拖动调整组顺序" aria-hidden="true">⠿</span>
         ${headerInner}
         ${groupActions}
-      </header>
+      </header>`
+    : "";
+  return `
+    <section class="group${collapsed ? " collapsed" : ""}${group ? "" : " ungrouped"}"
+             data-gid="${group ? group.id : ""}"${group ? ` draggable="${editMode}"` : ""}>
+      ${headBlock}
       <div class="group-body${collapsed ? " hidden" : ""}">
         ${visible.map(cardHtml).join("") || '<p class="group-empty">此分组暂无应用</p>'}
       </div>
@@ -1313,6 +1333,9 @@ function openDialog(app) {
   $("#downloadUrlInput").value = app ? (app.downloadUrl || "") : "";
   // 记住已有候选列表,编辑保存时一并提交(用户没重新检测则保持原样)
   pendingDownloads = app && Array.isArray(app.downloads) ? app.downloads : [];
+
+// B4: 手动编辑下载地址时清空旧候选(自动检测的程序化赋值不触发 input 事件)
+$("#downloadUrlInput").addEventListener("input", () => { pendingDownloads = []; });
   $("#linkNameInput").checked = app ? app.linkName === true : false;
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
@@ -1338,6 +1361,42 @@ $("#cancelBtn").addEventListener("click", () => dlg.close());
  * 共同祖先(dialog)上,导致「全选文字后移出框外」把弹窗关掉。
  * 这里改为:按下和松开的位置都在遮罩本身上,才关闭。
  */
+/**
+ * 弹窗辅助:遮罩点击关闭(B5) + 焦点管理:
+ *   - showModal 时记住触发元素并聚焦弹窗内首个输入控件
+ *   - close 时把焦点还给触发元素
+ *   - Tab 键在弹窗内循环圈定,不会跑到页面背景
+ */
+function enhanceDialog(dialogEl, initialFocusSelector) {
+  let lastFocus = null;
+  const _showModal = dialogEl.showModal.bind(dialogEl);
+  const _close = dialogEl.close.bind(dialogEl);
+  dialogEl.showModal = function (...args) {
+    lastFocus = document.activeElement;
+    const result = _showModal(...args);
+    const target = initialFocusSelector ? dialogEl.querySelector(initialFocusSelector) : null;
+    (target || dialogEl.querySelector("button, input, select, textarea"))?.focus();
+    return result;
+  };
+  dialogEl.close = function (...args) {
+    const result = _close(...args);
+    if (lastFocus && document.contains(lastFocus)) {
+      try { lastFocus.focus({ preventScroll: true }); } catch { lastFocus.focus(); }
+    }
+    return result;
+  };
+  dialogEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const list = [...dialogEl.querySelectorAll("button, input, select, textarea, [tabindex]:not([tabindex='-1'])")]
+      .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!list.length) return;
+    const first = list[0];
+    const last = list[list.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+}
+
 function bindBackdropClose(dialogEl) {
   let downOnBackdrop = false;
   dialogEl.addEventListener("mousedown", (e) => {
@@ -1350,6 +1409,7 @@ function bindBackdropClose(dialogEl) {
   });
 }
 bindBackdropClose(dlg);
+enhanceDialog(dlg, '#appForm input[name="name"]');
 
 /* 自动检测官网与下载地址:按当前表单里的渠道/仓库/包 ID 推导 */
 $("#detectLinksBtn").addEventListener("click", async () => {
@@ -1459,6 +1519,7 @@ $("#loginBtn").addEventListener("click", () => {
 });
 $("#loginCancelBtn").addEventListener("click", () => loginDlg.close());
 bindBackdropClose(loginDlg);
+enhanceDialog(loginDlg, '#loginForm input[type="password"]');
 
 loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1519,6 +1580,7 @@ $("#exportBtn").addEventListener("click", exportConfig);
 $("#importBtn").addEventListener("click", () => { $("#importFile").value = ""; importDlg.showModal(); });
 $("#importCancelBtn").addEventListener("click", () => importDlg.close());
 bindBackdropClose(importDlg);
+enhanceDialog(importDlg, '#importForm input[type="file"]');
 
 $("#importForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1655,36 +1717,58 @@ function toggleGroup(groupId) {
   render();
 }
 
-async function createGroup() {
-  const name = prompt("新分组名称:");
-  if (name === null) return;
-  const trimmed = name.trim();
-  if (!trimmed) { toast("分组名称不能为空", "error"); return; }
-  try {
-    const g = await api("/api/groups", { method: "POST", body: { name: trimmed } });
-    groups.push(g);
-    render();
-    toast("已创建分组「" + g.name + "」");
-  } catch (e) {
-    toast(e.message, "error");
-  }
+/* ── 分组命名弹窗(B3:替代浏览器原生 prompt)── */
+
+const groupDlg = $("#groupDialog");
+const groupForm = $("#groupForm");
+let groupDialogMode = "create";
+let groupDialogTarget = null;
+
+function openGroupDialog(mode, gid) {
+  groupDialogMode = mode;
+  groupDialogTarget = mode === "rename" ? gid : null;
+  $("#groupDlgTitle").textContent = mode === "rename" ? "重命名分组" : "新建分组";
+  $("#groupSaveBtn").textContent = mode === "rename" ? "保存" : "创建";
+  $("#groupNameInput").value = mode === "rename"
+    ? (groups.find((x) => x.id === gid) || {}).name || ""
+    : "";
+  groupDlg.showModal();
 }
 
-async function renameGroup(groupId) {
-  const g = groups.find((x) => x.id === groupId);
-  if (!g) return;
-  const name = prompt("重命名分组:", g.name);
-  if (name === null) return;
-  const trimmed = name.trim();
-  if (!trimmed || trimmed === g.name) return;
+groupForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("#groupNameInput").value.trim();
+  if (!name) { toast("分组名称不能为空", "error"); return; }
+  const btn = $("#groupSaveBtn");
+  btn.disabled = true;
   try {
-    const updated = await api("/api/groups/" + groupId, { method: "PUT", body: { name: trimmed } });
-    Object.assign(g, updated);
+    if (groupDialogMode === "rename" && groupDialogTarget) {
+      const updated = await api("/api/groups/" + groupDialogTarget, { method: "PUT", body: { name } });
+      groups = groups.map((g) => (g.id === groupDialogTarget ? { ...g, ...updated } : g));
+      toast("已重命名");
+    } else {
+      const g = await api("/api/groups", { method: "POST", body: { name } });
+      groups.push(g);
+      toast("已创建分组「" + g.name + "」");
+    }
+    groupDlg.close();
     render();
-    toast("已重命名");
-  } catch (e) {
-    toast(e.message, "error");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    btn.disabled = false;
   }
+});
+$("#groupCancelBtn").addEventListener("click", () => groupDlg.close());
+bindBackdropClose(groupDlg);
+enhanceDialog(groupDlg, "#groupNameInput");
+
+async function createGroup() {
+  openGroupDialog("create");
+}
+
+function renameGroup(groupId) {
+  openGroupDialog("rename", groupId);
 }
 
 async function deleteGroup(groupId) {
@@ -1750,11 +1834,114 @@ listEl.addEventListener("dragend", () => {
   dragGroupId = null;
 });
 
+/* ── 触屏拖拽(B6):手机上从手柄长按/拖动即可排序,桌面鼠标仍走 HTML5 拖拽 ── */
+let touchDrag = null; // {type:'card'|'group', id, el, startY, moved, pointerId}
+
+listEl.addEventListener("pointerdown", (e) => {
+  if (!editMode || e.pointerType === "mouse") return; // 触屏/笔才启用,鼠标交给 HTML5 拖拽
+  const handle = e.target.closest(".drag-handle, .grp-drag");
+  if (!handle) return;
+  const card = handle.closest(".card");
+  const grp = handle.closest(".group:not(.ungrouped)");
+  const type = card ? "card" : grp ? "group" : null;
+  if (!type) return;
+  e.preventDefault(); // 阻止触屏滚动,进入拖拽
+  touchDrag = {
+    type,
+    id: type === "card" ? card.dataset.id : grp.dataset.gid,
+    el: type === "card" ? card : grp,
+    startY: e.clientY,
+    moved: false,
+  };
+  try { handle.setPointerCapture(e.pointerId); } catch { /* 部分浏览器不支持时忽略 */ }
+});
+
+listEl.addEventListener("pointermove", (e) => {
+  if (!touchDrag) return;
+  const dy = e.clientY - touchDrag.startY;
+  if (!touchDrag.moved && Math.abs(dy) > 8) {
+    touchDrag.moved = true;
+    touchDrag.el.classList.add("dragging");
+  }
+  if (touchDrag.moved) {
+    touchDrag.el.style.transform = `translateY(${dy}px)`;
+    // 高亮手指当前所在的分组
+    clearDragOver();
+    const hit = document.elementFromPoint(e.clientX, e.clientY);
+    const grp = hit && hit.closest(".group");
+    if (grp && grp !== touchDrag.el) grp.classList.add("drag-over");
+  }
+});
+
+listEl.addEventListener("pointerup", async (e) => {
+  if (!touchDrag) return;
+  const { type, id, el, moved } = touchDrag;
+  el.style.transform = "";
+  el.classList.remove("dragging");
+  clearDragOver();
+  touchDrag = null;
+  if (!moved) return; // 无位移视为误触,不做任何移动
+
+  // 找手指位置所在的目标分组
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  const grpEl = hit && hit.closest(".group");
+  const targetGid = grpEl ? (grpEl.dataset.gid || null) : undefined;
+  if (targetGid === undefined) return;
+
+  try {
+    if (type === "card") {
+      const app = apps.find((a) => a.id === id);
+      const inSame = app && (app.groupId || null) === targetGid;
+      if (inSame) {
+        // 同组:放到手指位置最近的卡片之后(跳过被拖的卡片自身)
+        const siblings = appsInGroup(targetGid).filter((a) => a.id !== id);
+        const cards = [...grpEl.querySelectorAll(".card")].filter(c => c.dataset.id !== id);
+        let idx = siblings.length;
+        for (let i = cards.length - 1; i >= 0; i--) {
+          if (e.clientY >= cards[i].getBoundingClientRect().top) {
+            idx = siblings.findIndex((a) => a.id === cards[i].dataset.id) + 1;
+            break;
+          }
+        }
+        await moveAppInGroup(id, idx);
+      } else {
+        await moveAppToGroup(id, targetGid);
+        if (targetGid) setGroupCollapsed(targetGid, false);
+      }
+    } else {
+      // 组拖拽:放到目标组的位置
+      const sorted = sortByOrder(groups);
+      const to = sorted.findIndex((g) => g.id === targetGid);
+      const from = sorted.findIndex((g) => g.id === id);
+      if (to >= 0 && from >= 0 && to !== from) {
+        const [movedGrp] = sorted.splice(from, 1);
+        sorted.splice(to, 0, movedGrp);
+        sorted.forEach((g, k) => { g.order = k; });
+        await saveLayout();
+      }
+    }
+    render();
+  } catch (err) {
+    toast(err.message, "error");
+    render();
+  }
+});
+
+listEl.addEventListener("pointercancel", () => {
+  if (!touchDrag) return;
+  touchDrag.el.style.transform = "";
+  touchDrag.el.classList.remove("dragging");
+  clearDragOver();
+  touchDrag = null;
+});
+
 listEl.addEventListener("dragover", (e) => {
   if (!editMode) return;
   if (dragAppId) {
     const card = e.target.closest(".card");
     const body = e.target.closest(".group-body");
+    // B2: 折叠组的 body 隐藏,允许拖到其标题上作为落点
+    const collapsedHead = e.target.closest(".group.collapsed .group-head");
     if (card && card.dataset.id !== dragAppId) {
       e.preventDefault();
       clearDragOver();
@@ -1765,6 +1952,12 @@ listEl.addEventListener("dragover", (e) => {
       e.preventDefault();
       clearDragOver();
       body.closest(".group").classList.add("drag-over");
+      return;
+    }
+    if (collapsedHead) {
+      e.preventDefault();
+      clearDragOver();
+      collapsedHead.closest(".group").classList.add("drag-over");
     }
     return;
   }
@@ -1804,6 +1997,11 @@ listEl.addEventListener("drop", async (e) => {
       } else if (targetBody && targetGroupEl) {
         const gid = targetGroupEl.dataset.gid || null;
         await moveAppToGroup(dragAppId, gid);
+      } else if (targetGroupEl && targetGroupEl.classList.contains("collapsed")) {
+        // B2: 拖到折叠组的标题上 → 移入该组并自动展开
+        const gid = targetGroupEl.dataset.gid || null;
+        await moveAppToGroup(dragAppId, gid);
+        setGroupCollapsed(gid, false);
       }
     } catch (err) {
       toast(err.message, "error");
