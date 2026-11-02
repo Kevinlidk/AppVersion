@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#f4f6fb">
 <title>应用版本检测</title>
 <!-- 动态背景引擎样式(先引入,便于页面样式覆盖墨色) -->
 <link rel="stylesheet" href="background/engine.css">
 <style>
+  /* ── 主题 ────────────────────────────────────────────────
+     UI(卡片/顶栏/文字)在两种主题下都保持浅色;
+     只有"画布底色 + 背景墨色 + 压在画布上的文字"随主题切换。
+     默认浅色;切换按钮把选择存进 localStorage。 */
   :root {
-    --bg: #f4f6fb;
     --card: #ffffff;
     --text: #101828;
     --muted: #667085;
@@ -25,35 +27,34 @@
     --danger: #d92d20;
     --radius: 14px;
     --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
+
+    /* 浅色显示(默认):浅底 + 中灰字形,动效参数与深色完全一致 */
+    --page-bg: #f4f6fb;
+    --bg-ink: #6b7688;
+    --haze: none;
+    --on-canvas: #667085;
+    --link-on-canvas: #2563eb;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0b1220;
-      --card: #111a2c;
-      --text: #e6eaf2;
-      --muted: #98a2b3;
-      --border: #22304a;
-      --accent: #60a5fa;
-      --accent-weak: #16233c;
-      --ok: #4ade80;
-      --ok-bg: #0c2a1e;
-      --warn: #fbbf24;
-      --warn-bg: #2a1f0c;
-      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
-    }
+  html[data-theme="dark"] {
+    /* 深色显示:#333 底 + 白色薄雾层 + 浅灰字形(参考项目同款) */
+    --page-bg: #333;
+    --bg-ink: #8a93a0;
+    --haze: linear-gradient(rgba(255, 255, 255, .10), rgba(255, 255, 255, .04));
+    --on-canvas: #c3cbdb;
+    --link-on-canvas: #93c5fd;
   }
   * { box-sizing: border-box; }
-  /* 深色页面底色(参考项目同款 #333),让浅灰字形的动态背景清晰可见;
-     卡片 / 顶栏 / 输入框等 UI 仍保持浅色主题 */
-  html { -webkit-text-size-adjust: 100%; background: #333; }
-  /* 薄雾高光层:与参考项目一致,叠在画布之上、内容之下,轻微提亮 */
+  html { -webkit-text-size-adjust: 100%; background: var(--page-bg); color-scheme: light; }
+  /* 背景墨色:引擎每帧读取 #bg-stage 的 computed color,切换主题即时生效 */
+  #bg-stage { color: var(--bg-ink); }
+  /* 薄雾高光层:仅深色主题启用,叠在画布之上、内容之下 */
   body::after {
     content: '';
     position: fixed;
     inset: 0;
     z-index: -1;
     pointer-events: none;
-    background: linear-gradient(rgba(255, 255, 255, .10), rgba(255, 255, 255, .04));
+    background: var(--haze);
   }
   body {
     margin: 0;
@@ -77,13 +78,15 @@
   .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding-top: 8px; padding-bottom: 8px; }
   h1 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
   .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  .github-link {
+  .github-link, .icon-btn {
     display: flex; align-items: center; justify-content: center;
     width: 38px; height: 38px; border-radius: 10px;
+    border: none; padding: 0; background: transparent; cursor: pointer;
     color: var(--text); transition: transform .06s, background .2s, color .2s;
   }
-  .github-link:hover { background: var(--accent-weak); color: var(--accent); }
-  .github-link:active { transform: scale(.94); }
+  .github-link:hover, .icon-btn:hover { background: var(--accent-weak); color: var(--accent); }
+  .github-link:active, .icon-btn:active { transform: scale(.94); }
+  .github-link:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .admin-chip {
     font-size: 12.5px; font-weight: 600; white-space: nowrap;
     color: var(--ok); background: var(--ok-bg);
@@ -92,9 +95,12 @@
   @media (max-width: 430px) {
     h1 { font-size: 15px; }
     .btn { padding: 0 11px; font-size: 13.5px; }
-    /* 窄屏收起管理员徽章,登录态由「退出」按钮表达,避免顶栏溢出换行 */
+    /* 窄屏:管理员徽章收起(登录态由「退出」表达),
+       「全部刷新」只留图标,给主题/仓库图标腾出空间,顶栏保持单行 */
     .admin-chip { display: none !important; }
     .top-actions { gap: 6px; }
+    #refreshAllBtn .lbl { display: none; }
+    #refreshAllBtn { padding: 0 10px; }
   }
 
   /* ── 按钮 ── */
@@ -130,9 +136,9 @@
   }
   .chip.active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
   .stats { font-size: 13px; margin-top: 12px; min-height: 1.2em; }
-  /* 以下文本直接压在深色动态背景上,用浅色保证可读(卡片内不受影响) */
-  .stats, .empty, .footer { color: #c3cbdb; }
-  .footer a { color: #93c5fd; }
+  /* 以下文本直接压在动态背景上,颜色随主题切换(卡片内不受影响) */
+  .stats, .empty, .footer { color: var(--on-canvas); }
+  .footer a { color: var(--link-on-canvas); }
   .manage { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
   .manage .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
 
@@ -193,7 +199,7 @@
   dialog input, dialog select {
     width: 100%; margin-top: 6px; min-height: 42px;
     border-radius: 10px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text);
+    background: #f4f6fb; color: var(--text);
     padding: 8px 12px; font-size: 16px;
   }
   dialog label.check-row {
@@ -220,9 +226,20 @@
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: var(--danger); }
 
-  .footer { text-align: center; color: var(--muted); font-size: 12.5px; padding: 28px 0 96px; }
-  .footer a { color: var(--accent); text-decoration: none; }
+  .footer { text-align: center; font-size: 12.5px; padding: 28px 0 96px; }
+  .footer a { text-decoration: none; }
 </style>
+<script>
+/* 尽早应用主题,避免首屏闪一下(默认浅色) */
+(function () {
+  try {
+    var saved = localStorage.getItem("av_theme");
+    document.documentElement.dataset.theme = saved === "dark" ? "dark" : "light";
+  } catch (e) {
+    document.documentElement.dataset.theme = "light";
+  }
+})();
+</script>
 </head>
 <body>
 
@@ -232,10 +249,13 @@
   <div class="container topbar-inner">
     <h1><span aria-hidden="true">📦</span>应用版本检测</h1>
     <div class="top-actions">
-      <button id="refreshAllBtn" class="btn ghost hidden">⟳ 全部刷新</button>
+      <button id="refreshAllBtn" class="btn ghost hidden"><span aria-hidden="true">⟳</span><span class="lbl"> 全部刷新</span></button>
       <span id="adminBadge" class="admin-chip hidden">管理员</span>
       <button id="logoutBtn" class="btn ghost hidden">退出</button>
       <button id="loginBtn" class="btn ghost">登录</button>
+      <button id="themeToggle" class="icon-btn" type="button" aria-label="切换到深色显示" title="切换到深色显示">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
       <a class="github-link" href="https://github.com/Kevinlidk/AppVersion" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库" title="GitHub 仓库：Kevinlidk/AppVersion">
         <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
       </a>
@@ -531,10 +551,11 @@ async function refreshAll() {
   const targets = apps.filter((a) => a.channel !== "manual");
   if (!targets.length) { toast("没有可自动查询的应用"); return; }
   const btn = $("#refreshAllBtn");
+  const label = (html) => { btn.innerHTML = html; };
   btn.disabled = true;
   let ok = 0, fail = 0;
   for (let i = 0; i < targets.length; i++) {
-    btn.textContent = "刷新中 " + (i + 1) + "/" + targets.length;
+    label('<span class="lbl">刷新中 ' + (i + 1) + "/" + targets.length + "</span>");
     try {
       const updated = await api("/api/apps/" + targets[i].id + "/refresh", { method: "POST" });
       apps = apps.map((a) => (a.id === updated.id ? updated : a));
@@ -543,7 +564,7 @@ async function refreshAll() {
     render();
   }
   btn.disabled = false;
-  btn.textContent = "⟳ 全部刷新";
+  label('<span aria-hidden="true">⟳</span><span class="lbl"> 全部刷新</span>');
   toast("刷新完成:" + ok + " 成功" + (fail ? "," + fail + " 失败" : ""), ok ? undefined : "error");
 }
 
@@ -764,6 +785,34 @@ $("#importForm").addEventListener("submit", async (e) => {
   }
 });
 
+/* ── 主题切换(浅色 / 深色,默认浅色)── */
+
+const THEME_ICONS = {
+  // 当前浅色 → 按钮显示"月亮",点击切到深色
+  light: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  // 当前深色 → 按钮显示"太阳",点击切到浅色
+  dark: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+};
+
+function applyTheme(theme) {
+  const dark = theme === "dark";
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const btn = $("#themeToggle");
+  btn.innerHTML = dark ? THEME_ICONS.dark : THEME_ICONS.light;
+  const label = dark ? "切换到浅色显示" : "切换到深色显示";
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+  // 移动端浏览器地址栏配色跟随
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = dark ? "#333" : "#f4f6fb";
+}
+
+$("#themeToggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(next);
+  try { localStorage.setItem("av_theme", next); } catch { /* 隐私模式下忽略 */ }
+});
+
 /* ── 事件绑定 ── */
 
 listEl.addEventListener("click", (e) => {
@@ -793,6 +842,7 @@ $("#addBtn").addEventListener("click", () => openDialog(null));
 $("#emptyAddBtn").addEventListener("click", () => openDialog(null));
 
 (async () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   await initSession();
   renderAdminUi();
   await load();
