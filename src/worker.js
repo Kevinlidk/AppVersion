@@ -284,6 +284,32 @@ function validateIconUrl(raw) {
   return u.href;
 }
 
+/** 校验「应用官网地址」:必须是 https 公网链接 */
+function validateAppUrl(raw) {
+  if (!raw) return "";
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new ApiError("应用官网地址格式不正确,应为完整 URL(以 https:// 开头)");
+  }
+  if (u.protocol !== "https:") throw new ApiError("应用官网地址必须使用 https://");
+  return u.href;
+}
+
+/** 校验「下载地址」:允许 https 链接(可能指向安装包/发布页) */
+function validateDownloadUrl(raw) {
+  if (!raw) return "";
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new ApiError("下载地址格式不正确,应为完整 URL(以 https:// 开头)");
+  }
+  if (u.protocol !== "https:") throw new ApiError("下载地址必须使用 https://");
+  return u.href;
+}
+
 /** 校验版本字段路径:只允许 键名、数字索引、[字段=值] 三种片段 */
 function validateJsonPath(raw) {
   const path = String(raw || "").trim();
@@ -435,6 +461,14 @@ function normalizeApp(input, base = {}) {
   } else if (out.iconUrl === undefined) {
     out.iconUrl = "";
   }
+  // 应用官网地址 + 是否在首页显示为可点击链接
+  if (input.appUrl !== undefined) out.appUrl = validateAppUrl(String(input.appUrl).trim());
+  else if (out.appUrl === undefined) out.appUrl = "";
+  if (input.linkName !== undefined) out.linkName = Boolean(input.linkName);
+  else if (out.linkName === undefined) out.linkName = false;
+  // 最新版本下载地址
+  if (input.downloadUrl !== undefined) out.downloadUrl = validateDownloadUrl(String(input.downloadUrl).trim());
+  else if (out.downloadUrl === undefined) out.downloadUrl = "";
   if (input.version !== undefined) out.version = String(input.version).trim();
   if (input.note !== undefined) out.note = String(input.note).trim();
   // 推送通知默认关闭:需在表单中主动勾选才会纳入定时检查与推送
@@ -990,6 +1024,64 @@ async function handleApi(request, env, pathname) {
     app.notifiedVersion = latest.version;
     await writeApps(env, list);
     return json(app);
+  }
+
+  /* ── 自动检测应用的官网与下载地址(需管理员)──
+     来源优先级:GitHub Releases(主页/资产) → winget 清单 → Chocolatey 包页面 */
+  if (pathname === "/api/apps/detect-links" && method === "POST") {
+    await requireAdmin(env, request);
+    const body = await readJson(request);
+    const draft = normalizeApp({
+      name: body.name || "temp",
+      channel: body.channel || "manual",
+      repo: body.repo,
+      packageId: body.packageId,
+      officialUrl: body.officialUrl,
+      jsonPath: body.jsonPath,
+      version: body.version,
+    });
+    const out = { appUrl: "", downloadUrl: "", source: null };
+
+    if (draft.channel === "github" && draft.repo) {
+      const headers = await ghHeaders(env);
+      out.appUrl = "https://github.com/" + draft.repo;
+      let res = await fetchWithRetry(`https://api.github.com/repos/${draft.repo}/releases/latest`, { headers });
+      if (res.status === 404) {
+        res = await fetchWithRetry(`https://api.github.com/repos/${draft.repo}/releases?per_page=1`, { headers });
+        if (res.ok) {
+          const arr = await res.json();
+          if (Array.isArray(arr) && arr.length) {
+            out.downloadUrl = arr[0].html_url || "";
+            out.source = "github-release";
+          }
+        }
+      } else if (res.ok) {
+        const r = await res.json();
+        out.downloadUrl = r.html_url || "";
+        // 优先挑一个安装包资产(Windows 安装器优先)
+        const assets = Array.isArray(r.assets) ? r.assets : [];
+        const preferred = assets.find((x) => /\.(exe|msi|msix|dmg|pkg|deb|rpm|appimage)$/i.test(x.name || ""))
+          || assets.find((x) => x.browser_download_url);
+        if (preferred && preferred.browser_download_url) {
+          out.downloadUrl = preferred.browser_download_url;
+        }
+        out.source = "github-release";
+      }
+    } else if (draft.channel === "winget" && draft.packageId) {
+      out.appUrl = "https://winget.run/pkg/" + draft.packageId.replace(".", "/");
+      out.downloadUrl = out.appUrl;
+      out.source = "winget";
+    } else if (draft.channel === "chocolatey" && draft.packageId) {
+      out.appUrl = `${CHOCO_HOST}/packages/${encodeURIComponent(draft.packageId)}`;
+      out.downloadUrl = out.appUrl;
+      out.source = "chocolatey";
+    } else if (draft.channel === "official" && draft.officialUrl) {
+      // 官方自查:用 API 域名作官网,下载地址留空交给用户填写
+      try { out.appUrl = "https://" + new URL(draft.officialUrl).hostname; } catch { /* 忽略 */ }
+      out.source = "official";
+    }
+
+    return json(out);
   }
 
   if (pathname === "/api/apps/export" && method === "GET") {

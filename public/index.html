@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#f4f6fb">
-<title>应用版本检测</title>
+<title>AppVersion - 应用版本检测</title>
 <!-- 站点图标(浏览器标签页):SVG 主图标 + ICO/PNG 兜底 -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="alternate icon" href="favicon.ico" sizes="any">
@@ -297,6 +297,25 @@
     user-select: none;
   }
   .app-name { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; min-width: 0; }
+  /* 可点击的应用名(启用「显示为链接」时) */
+  .app-name-link {
+    color: var(--accent); text-decoration: none;
+    border-bottom: 1px solid transparent; transition: border-color .15s;
+  }
+  .app-name-link:hover { border-bottom-color: var(--accent); }
+  /* 卡片右下角下载按钮 */
+  .card { position: relative; }
+  .card-download {
+    position: absolute; right: 12px; bottom: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 8px;
+    color: var(--accent); background: var(--accent-weak);
+    text-decoration: none; transition: transform .08s, background .15s;
+  }
+  .card-download:hover { background: var(--accent); color: #fff; }
+  .card-download:active { transform: scale(.92); }
+  /* 有下载按钮时给操作区留出空间,避免按钮重叠 */
+  .card:has(.card-download) .card-actions { padding-right: 34px; }
   .badge {
     flex-shrink: 0; font-size: 12px; font-weight: 600;
     padding: 3px 9px; border-radius: 999px;
@@ -356,6 +375,11 @@
     accent-color: var(--accent); flex-shrink: 0;
   }
   .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  /* 输入框 + 右侧动作按钮 同行 */
+  .field-row { display: flex; align-items: flex-end; gap: 8px; }
+  .field-row > label { flex: 1; min-width: 0; }
+  .detect-btn { min-height: 42px; margin-bottom: 1px; flex-shrink: 0; white-space: nowrap; }
+  .detect-btn[disabled] { opacity: .6; }
   .dlg-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
   /* ── 轻提示 ── */
@@ -392,7 +416,7 @@
 
 <header class="topbar">
   <div class="container topbar-inner">
-    <h1><span aria-hidden="true">📦</span>应用版本检测</h1>
+    <h1><span aria-hidden="true">📦</span>AppVersion - 应用版本检测</h1>
     <div class="top-actions">
       <button id="refreshAllBtn" class="btn ghost hidden"><span aria-hidden="true">⟳</span><span class="lbl"> 全部刷新</span></button>
       <span id="adminBadge" class="admin-chip hidden">管理员</span>
@@ -489,6 +513,19 @@
     </label>
     <label>图标地址(可选)
       <input name="iconUrl" id="iconUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="留空则自动匹配官方图标,匹配不到用名称缩写">
+    </label>
+    <div class="field-row">
+      <label>应用官网地址
+        <input name="appUrl" id="appUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="https://example.com">
+      </label>
+      <button type="button" class="btn detect-btn" id="detectLinksBtn" title="根据当前应用信息自动获取官网与下载地址">自动检测</button>
+    </div>
+    <label class="check-row">
+      <input type="checkbox" id="linkNameInput">
+      <span>在首页把应用名显示为可点击链接(新标签页打开官网)</span>
+    </label>
+    <label>最新版本下载地址
+      <input name="downloadUrl" id="downloadUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="https://example.com/app-setup.exe">
     </label>
     <label class="check-row">
       <input type="checkbox" id="notifyInput">
@@ -839,6 +876,27 @@ function sourceMeta(a) {
   return { label: "手动维护" };
 }
 
+/** 应用名:勾选「显示为链接」且有官网地址时渲染为新标签页链接 */
+function nameHtml(a) {
+  const label = esc(a.name);
+  if (a.linkName && a.appUrl) {
+    return `<h3 class="app-name"><a class="app-name-link" href="${esc(a.appUrl)}" ` +
+      `target="_blank" rel="noopener noreferrer" title="${esc(a.appUrl)}">${label}</a></h3>`;
+  }
+  return `<h3 class="app-name">${label}</h3>`;
+}
+
+/** 卡片右下角的下载按钮:仅在填写了下载地址时出现 */
+function downloadBtnHtml(a) {
+  if (!a.downloadUrl) return "";
+  return `<a class="card-download" href="${esc(a.downloadUrl)}" target="_blank" ` +
+    `rel="noopener noreferrer" download title="下载最新版本:${esc(a.downloadUrl)}" ` +
+    `aria-label="下载 ${esc(a.name)} 最新版本">` +
+    `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ` +
+    `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></a>`;
+}
+
 function cardHtml(a) {
   const manual = a.channel === "manual";
   const st = statusOf(a);
@@ -868,7 +926,7 @@ function cardHtml(a) {
       <div class="card-top">
         <div class="app-head">
           ${iconHtml(a)}
-          <h3 class="app-name">${esc(a.name)}</h3>
+          ${nameHtml(a)}
         </div>
         ${badgeOf(a)}
       </div>
@@ -879,6 +937,7 @@ function cardHtml(a) {
       <div class="meta">${meta.join('<span aria-hidden="true">·</span>')}</div>
       ${a.note ? `<p class="note">${esc(a.note)}</p>` : ""}
       ${actions}
+      ${downloadBtnHtml(a)}
     </article>`;
 }
 
@@ -1137,6 +1196,9 @@ function openDialog(app) {
   $("#officialUrlInput").value = app ? (app.officialUrl || "") : "";
   $("#jsonPathInput").value = app ? (app.jsonPath || "") : "";
   $("#iconUrlInput").value = app ? (app.iconUrl || "") : "";
+  $("#appUrlInput").value = app ? (app.appUrl || "") : "";
+  $("#downloadUrlInput").value = app ? (app.downloadUrl || "") : "";
+  $("#linkNameInput").checked = app ? app.linkName === true : false;
   form.version.value = app ? (app.version || "") : "";
   form.note.value = app ? (app.note || "") : "";
   $("#notifyInput").checked = app ? app.notify === true : false;
@@ -1153,7 +1215,64 @@ function openDialog(app) {
 
 form.channel.addEventListener("change", syncChannelUi);
 $("#cancelBtn").addEventListener("click", () => dlg.close());
-dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+
+/**
+ * 点击遮罩关闭弹窗。
+ * 注意:不能直接用 click 事件的 e.target === dialog 判断 ——
+ * 在输入框内按下鼠标、拖到框外松开时,浏览器会把 click 归到
+ * 共同祖先(dialog)上,导致「全选文字后移出框外」把弹窗关掉。
+ * 这里改为:按下和松开的位置都在遮罩本身上,才关闭。
+ */
+function bindBackdropClose(dialogEl) {
+  let downOnBackdrop = false;
+  dialogEl.addEventListener("mousedown", (e) => {
+    downOnBackdrop = e.target === dialogEl;
+  });
+  dialogEl.addEventListener("click", (e) => {
+    if (!downOnBackdrop || e.target !== dialogEl) return;
+    downOnBackdrop = false;
+    dialogEl.close();
+  });
+}
+bindBackdropClose(dlg);
+
+/* 自动检测官网与下载地址:按当前表单里的渠道/仓库/包 ID 推导 */
+$("#detectLinksBtn").addEventListener("click", async () => {
+  const ch = form.channel.value;
+  const btn = $("#detectLinksBtn");
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "检测中…";
+  try {
+    const r = await api("/api/apps/detect-links", {
+      method: "POST",
+      body: {
+        name: form.name.value.trim() || "temp",
+        channel: ch,
+        repo: form.source.value.trim(),
+        packageId: form.source.value.trim(),
+        officialUrl: $("#officialUrlInput").value.trim(),
+        jsonPath: $("#jsonPathInput").value.trim(),
+        version: form.version.value.trim(),
+      },
+    });
+    let filled = 0;
+    if (r.appUrl) {
+      $("#appUrlInput").value = r.appUrl;
+      filled++;
+      // 官网有了,顺手打开「显示为链接」
+      if (!$("#linkNameInput").checked) $("#linkNameInput").checked = true;
+    }
+    if (r.downloadUrl) { $("#downloadUrlInput").value = r.downloadUrl; filled++; }
+    if (filled) toast("已自动填入 " + filled + " 个地址");
+    else toast("未能自动获取地址,请手动填写", "error");
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1165,6 +1284,9 @@ form.addEventListener("submit", async (e) => {
     version: form.version.value.trim(),
     note: form.note.value.trim(),
     iconUrl: $("#iconUrlInput").value.trim(),
+    appUrl: $("#appUrlInput").value.trim(),
+    downloadUrl: $("#downloadUrlInput").value.trim(),
+    linkName: $("#linkNameInput").checked,
     groupId: $("#groupIdSelect").value || null,
     notify: $("#notifyInput").checked,
   };
@@ -1216,7 +1338,7 @@ $("#loginBtn").addEventListener("click", () => {
   loginDlg.showModal();
 });
 $("#loginCancelBtn").addEventListener("click", () => loginDlg.close());
-loginDlg.addEventListener("click", (e) => { if (e.target === loginDlg) loginDlg.close(); });
+bindBackdropClose(loginDlg);
 
 loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1276,7 +1398,7 @@ async function exportConfig() {
 $("#exportBtn").addEventListener("click", exportConfig);
 $("#importBtn").addEventListener("click", () => { $("#importFile").value = ""; importDlg.showModal(); });
 $("#importCancelBtn").addEventListener("click", () => importDlg.close());
-importDlg.addEventListener("click", (e) => { if (e.target === importDlg) importDlg.close(); });
+bindBackdropClose(importDlg);
 
 $("#importForm").addEventListener("submit", async (e) => {
   e.preventDefault();

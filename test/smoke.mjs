@@ -488,6 +488,49 @@ await test("PUT 不存在的 id 返回 404", async () => {
   assertEq(res.status, 404, "状态码");
 });
 
+await test("appUrl/downloadUrl/linkName:可保存、校验 https、默认值正确", async () => {
+  const ok = await bodyOf(await call("/api/apps", post({
+    name: "带链接", channel: "manual", version: "1.0",
+    appUrl: "https://example.com/app",
+    downloadUrl: "https://example.com/app/setup.exe",
+    linkName: true,
+  })));
+  assertEq(ok.appUrl, "https://example.com/app", "官网地址");
+  assertEq(ok.downloadUrl, "https://example.com/app/setup.exe", "下载地址");
+  assertEq(ok.linkName, true, "显示为链接");
+
+  const plain = await bodyOf(await call("/api/apps", post({ name: "无链接", channel: "manual" })));
+  assertEq(plain.appUrl, "", "默认空官网");
+  assertEq(plain.downloadUrl, "", "默认空下载");
+  assertEq(plain.linkName, false, "默认不启用链接");
+
+  assertEq((await call("/api/apps", post({ name: "X", channel: "manual", appUrl: "http://a.com" }))).status, 400, "http 官网拒绝");
+  assertEq((await call("/api/apps", post({ name: "X", channel: "manual", downloadUrl: "http://a.com/x.exe" }))).status, 400, "http 下载拒绝");
+
+  await call("/api/apps/" + ok.id, { method: "DELETE" });
+  await call("/api/apps/" + plain.id, { method: "DELETE" });
+});
+
+await test("detect-links:GitHub 渠道返回仓库主页与 Release 下载页", async () => {
+  const res = await call("/api/apps/detect-links", post({ name: "Foo Bar", channel: "github", repo: "foo/bar" }));
+  assertEq(res.status, 200, "状态码");
+  const d = await bodyOf(res);
+  assertEq(d.appUrl, "https://github.com/foo/bar", "仓库主页");
+  if (!d.downloadUrl) throw new Error("缺少下载地址");
+  assertEq(d.source, "github-release", "来源");
+});
+
+await test("detect-links:Chocolatey/winget 渠道可推导页面地址;未登录 401", async () => {
+  const anon = await worker.fetch(new Request("http://localhost/api/apps/detect-links", post({ channel: "github", repo: "a/b" })), env, ctx);
+  assertEq(anon.status, 401, "未登录");
+
+  const c = await bodyOf(await call("/api/apps/detect-links", post({ channel: "chocolatey", packageId: "vlc" })));
+  assertEq(c.appUrl, "https://community.chocolatey.org/packages/vlc", "choco 页面");
+
+  const w = await bodyOf(await call("/api/apps/detect-links", post({ channel: "winget", packageId: "VideoLAN.VLC" })));
+  assertEq(w.source, "winget", "winget 来源");
+});
+
 /* ── 分组与布局 ── */
 
 await test("分组:创建/重命名/删除,删除后组内应用回到未分组", async () => {
