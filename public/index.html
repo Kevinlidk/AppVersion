@@ -604,6 +604,7 @@
     <button type="button" id="clearFilterBtn" class="link-btn">清除筛选</button>
   </div>
   <div id="manageRow" class="manage hidden">
+    <button id="diagBtn" class="btn">🩺 配置检查</button>
     <button id="exportBtn" class="btn">⬇ 导出配置</button>
     <button id="importBtn" class="btn">⬆ 导入配置</button>
     <button id="editModeBtn" class="btn">✎ 编辑布局</button>
@@ -612,7 +613,6 @@
   <div id="editBar" class="editbar hidden">
     <span class="hint-inline">编辑模式:可拖动卡片/分组排序(手机端用 ↑↓ 与下拉选择)</span>
     <button id="addGroupBtn" class="btn primary">＋ 新建分组</button>
-    <button id="diagBtn" class="btn">🩺 配置检查</button>
     <button id="exitEditBtn" class="btn">完成</button>
   </div>
 
@@ -850,7 +850,8 @@ function renderAdminUi() {
   $("#manageRow").classList.toggle("hidden", !isAdmin);
   if (!isAdmin && editMode) editMode = false;
   $("#editBar").classList.toggle("hidden", !(isAdmin && editMode));
-  if (!(isAdmin && editMode)) $("#diagPanel").classList.add("hidden");
+  // 退出登录时收起诊断面板(它含配置信息,不应给访客看)
+  if (!isAdmin) $("#diagPanel").classList.add("hidden");
   $("#editModeBtn").textContent = editMode ? "✎ 编辑中…" : "✎ 编辑布局";
   render();
 }
@@ -1913,7 +1914,6 @@ function setEditMode(on) {
   editMode = on && isAdmin;
   $("#editBar").classList.toggle("hidden", !editMode);
   $("#editModeBtn").textContent = editMode ? "✎ 编辑中…" : "✎ 编辑布局";
-  if (!editMode) $("#diagPanel").classList.add("hidden");
   render();
 }
 
