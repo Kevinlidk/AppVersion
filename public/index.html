@@ -465,6 +465,8 @@
     background: var(--card); color: var(--text);
     width: min(420px, 92vw); padding: 20px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
+    /* 供移入弹窗内的 toast 做绝对定位 */
+    position: relative;
   }
   dialog::backdrop { background: rgba(2, 6, 23, .55); }
   dialog h2 { font-size: 17px; margin: 0 0 4px; }
@@ -503,6 +505,18 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: var(--danger); }
+  /* 弹窗处于顶层(top layer),普通 z-index 盖不过;toast 被移入 dialog 时
+     改为在弹窗内绝对定位到底部居中,既不会被遮挡也不压住表单标题 */
+  dialog > .toast {
+    position: absolute; left: 50%; right: auto;
+    top: auto; bottom: 12px;
+    transform: translateX(-50%) translateY(6px);
+    max-width: calc(100% - 24px);
+    z-index: 10;
+    /* 底部会被「取消/保存」按钮区占用,提示条上移到按钮之上 */
+    margin-bottom: 46px;
+  }
+  dialog > .toast.show { transform: translateX(-50%) translateY(0); }
 
   .footer { text-align: center; font-size: 12.5px; padding: 28px 0 96px; }
   .footer a { text-decoration: none; }
@@ -697,7 +711,7 @@
   <a href="https://github.com/Kevinlidk/AppVersion" target="_blank" rel="noopener">GitHub 仓库</a>
 </footer>
 
-<div id="toast" class="toast" role="status"></div>
+<div id="toastHome"><div id="toast" class="toast" role="status"></div></div>
 
 <script>
 "use strict";
@@ -734,12 +748,30 @@ async function api(path, opts = {}) {
 }
 
 let toastTimer = null;
+/**
+ * 轻提示。
+ * 注意:用 showModal() 打开的 <dialog> 处于浏览器「顶层(top layer)」,
+ * 任何 z-index 的普通元素都盖不过它。因此当有弹窗打开时,
+ * 把 toast 临时挂到该弹窗内部,让它与弹窗同处顶层可见。
+ */
 function toast(msg, type) {
   const el = $("#toast");
+  const openDialog = document.querySelector("dialog[open]");
+  const home = document.getElementById("toastHome");
+  if (openDialog) {
+    if (el.parentElement !== openDialog) openDialog.appendChild(el);
+  } else if (el.parentElement !== home && home) {
+    home.appendChild(el);
+  }
   el.textContent = msg;
   el.className = "toast show" + (type === "error" ? " error" : "");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = "toast"; }, 2600);
+  toastTimer = setTimeout(() => {
+    el.className = "toast";
+    // 隐藏后归位,避免残留在弹窗里影响后续布局
+    const h = document.getElementById("toastHome");
+    if (h && el.parentElement !== h) h.appendChild(el);
+  }, 2600);
 }
 
 function fmtTime(iso) {
@@ -1429,6 +1461,12 @@ function enhanceDialog(dialogEl, initialFocusSelector) {
     const last = list[list.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  // 弹窗关闭时若 toast 还挂在里面,归位到页面容器
+  dialogEl.addEventListener("close", () => {
+    const t = dialogEl.querySelector(":scope > .toast");
+    const home = document.getElementById("toastHome");
+    if (t && home) home.appendChild(t);
   });
 }
 
