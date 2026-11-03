@@ -1172,7 +1172,8 @@ async function fetchOfficialLatest(app) {
  * 给 GitHub Release 资产打分并降序排列。
  * 优先级:x64.exe → x64.msi → 其他 exe → 其他 msi → msix → dmg/pkg → deb/rpm/AppImage
  * 会跳过签名/校验/调试等非安装文件,并对 arm / 32 位资产降级。
- * @returns {{name:string,url:string,score:number,kind:string,arch:string}[]}
+ * GitHub 为资产提供的 digest(形如 "sha256:…")一并解析为 sha256 字段。
+ * @returns {{name:string,url:string,score:number,kind:string,arch:string,sha256?:string}[]}
  */
 function rankDownloadAssets(assets, limit = 30) {
   if (!Array.isArray(assets) || !assets.length) return [];
@@ -1211,7 +1212,14 @@ function rankDownloadAssets(assets, limit = 30) {
     else if (isX86(lower) && !isX64(lower)) score -= 20;
 
     const arch = isX64(lower) ? "x64" : isArm(lower) ? "arm" : isX86(lower) ? "x86" : "";
-    scored.push({ name, url, score, kind: ext, arch });
+    const item = { name, url, score, kind: ext, arch };
+    // GitHub 资产的官方 sha256 摘要(digest: "sha256:…"),与 winget 清单的校验值同构
+    const digest = typeof asset.digest === "string" && asset.digest.startsWith("sha256:")
+      ? asset.digest.slice(7)
+      : "";
+    const sha = normalizeSha256(digest);
+    if (sha) item.sha256 = sha;
+    scored.push(item);
   }
 
   scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));

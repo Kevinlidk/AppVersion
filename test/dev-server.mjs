@@ -87,6 +87,14 @@ globalThis.fetch = async (input, init) => {
         tag_name: "v9.9.9",
         html_url: "https://github.com/example/repo/releases/tag/v9.9.9",
         published_at: "2026-01-01T00:00:00Z",
+        assets: [
+          {
+            name: "app-9.9.9-win64.exe",
+            browser_download_url: "https://dl.example.com/app-9.9.9-win64.exe",
+            digest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+          },
+          { name: "app-9.9.9-win64.msi", browser_download_url: "https://dl.example.com/app-9.9.9-win64.msi" },
+        ],
       }),
       { status: 200, headers: { "content-type": "application/json" } }
     );

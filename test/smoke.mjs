@@ -20,16 +20,21 @@ const ghBody = {
   assets: [],
 };
 
-/** 构造 GitHub Release 响应,附带指定资产名单 */
+/** 构造 GitHub Release 响应,附带指定资产名单(字符串或 {name,digest} 对象) */
 function ghReleaseWith(assetNames) {
   return {
     tag_name: "v2.0.0",
     html_url: "https://github.com/foo/bar/releases/tag/v2.0.0",
     published_at: "2026-01-01T00:00:00Z",
-    assets: assetNames.map((n) => ({
-      name: n,
-      browser_download_url: "https://github.com/foo/bar/releases/download/v2.0.0/" + encodeURIComponent(n),
-    })),
+    assets: assetNames.map((a) => {
+      const n = typeof a === "string" ? a : a.name;
+      const asset = {
+        name: n,
+        browser_download_url: "https://github.com/foo/bar/releases/download/v2.0.0/" + encodeURIComponent(n),
+      };
+      if (typeof a === "object" && a.digest) asset.digest = a.digest;
+      return asset;
+    }),
   };
 }
 let ghAssets = null; // 非 null 时返回带资产的响应
@@ -700,15 +705,23 @@ await test("A4: 应用名称超过 100 字符时服务端拒绝", async () => {
 });
 
 await test("A2: refresh 同步更新 downloads 候选列表", async () => {
-  // 构造一个带资产的 Release,刷新后 downloads 应该被写入
-  ghAssets = ["app-x64.exe", "app-x64.msi", "checksums.txt"];
+  // 构造一个带资产的 Release,刷新后 downloads 应该被写入;GitHub digest → sha256
+  ghAssets = [
+    { name: "app-x64.exe", digest: "sha256:ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789" },
+    { name: "app-x64.msi", digest: "sha256:not-valid-hash" },
+    "app-x86.exe",
+    "checksums.txt",
+  ];
   const a = await bodyOf(await call("/api/apps", post({ name: "同步候选", channel: "github", repo: "foo/bar" })));
   const r = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
   assertEq(r.status, 200, "刷新状态码");
   const app = await bodyOf(r);
   assertEq(Array.isArray(app.downloads), true, "downloads 已写入");
-  assertEq(app.downloads.length, 2, "候选数量(跳过校验文件)");
+  assertEq(app.downloads.length, 3, "候选数量(跳过校验文件)");
   assertEq(app.downloads[0].name, "app-x64.exe", "首选资产");
+  assertEq(app.downloads[0].sha256, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "GitHub digest 解析为 sha256(小写)");
+  if (app.downloads[1].sha256) throw new Error("非法 digest 未被剔除");
+  if (app.downloads[2].sha256) throw new Error("无 digest 的资产不应有 sha256");
   ghAssets = null;
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });

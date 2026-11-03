@@ -57,7 +57,7 @@
 - 🔗 **官网链接与下载** —— 每个应用可填写「应用官网地址」与「最新版本下载地址」:
   - 勾选「把应用名显示为可点击链接」后,首页卡片上的应用名变为链接,点击在新标签页打开官网
   - 卡片右下角显示**下载图标**;有多个安装包时,**鼠标悬停(或点击)图标会展开候选列表**,按分数排序,点选即下载对应文件
-    - **GitHub Releases 与 winget 两个渠道都支持**:winget 会读取清单里的 `installer.yaml`,解析出各架构的真实下载地址
+    - **GitHub Releases 与 winget 两个渠道都支持**:winget 会读取清单里的 `installer.yaml`,解析出各架构的真实下载地址;GitHub 则解析 Release 资产(官方为其计算的 `digest` 摘要同样展示)
     - 列表项带类型徽标(`EXE`/`MSI`/`DMG`…)与架构标签(`x64`/`arm`/`x86`),排名第一的选项高亮
     - winget 候选项下方显示**校验值文本框**:`ProductCode` 优先(两者都有时只显示它),否则显示 `SHA-256`,右上角复制图标可一键复制完整值
     - winget 候选排序:`x64` > `arm64` > `x86`;同架构内 `EXE` > `MSI` > `MSIX` > `ZIP`
@@ -355,7 +355,7 @@ npm test         # API + 定时推送冒烟测试(离线,69 项)
 }
 ```
 
-> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;winget 渠道的候选还会附带 `sha256` / `productCode`(来自该版本 `installer.yaml` 的 `InstallerSha256` / `ProductCode`,仅保留合法值),下载菜单中每个候选会在文件名下方显示校验值——两者同时存在时优先只显示 `ProductCode`,文本框右上角有复制按钮可一键复制完整值;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
+> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;校验值:winget 渠道的候选附带 `sha256` / `productCode`(来自该版本 `installer.yaml` 的 `InstallerSha256` / `ProductCode`),GitHub 渠道的候选附带 `sha256`(来自 GitHub 为资产计算的 `digest` 摘要),均仅保留合法值。下载菜单中每个候选会在文件名下方显示校验值——`ProductCode` 优先于 `SHA-256`,文本框右上角有复制按钮可一键复制完整值;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
 
 分组记录示例:
 
