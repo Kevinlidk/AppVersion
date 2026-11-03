@@ -380,6 +380,14 @@
   .card-download[aria-expanded="true"] { background: var(--accent); color: #fff; }
   /* 有下载按钮时给操作区留出空间,避免按钮重叠 */
   .card:has(.card-download) .card-actions { padding-right: 34px; }
+  /* 上移/下移始终作为一个整体,永远不会被拆到两行 */
+  .move-pair { display: inline-flex; gap: 6px; flex-shrink: 0; }
+  /* 有下载按钮时,↑↓ 整体换到独立一行并靠右,与下载图标同侧不打架 */
+  .card:has(.card-download) .move-pair {
+    flex-basis: 100%;
+    justify-content: flex-end;
+    margin-top: 2px;
+  }
 
   /* ── 下载候选菜单 ── */
   .dl-wrap { position: absolute; right: 12px; bottom: 10px; }
@@ -1073,8 +1081,10 @@ function cardHtml(a) {
               `<option value="${g.id}"${a.groupId === g.id ? " selected" : ""}>${esc(g.name)}</option>`
             ).join("")}
           </select>
-          <button class="btn tiny act-up" title="上移" aria-label="上移">↑</button>
-          <button class="btn tiny act-down" title="下移" aria-label="下移">↓</button>` : ""}
+          <span class="move-pair">
+            <button class="btn tiny act-up" title="上移" aria-label="上移">↑</button>
+            <button class="btn tiny act-down" title="下移" aria-label="下移">↓</button>
+          </span>` : ""}
       </div>` : "";
   return `
     <article class="card" data-id="${a.id}"${editMode ? ' draggable="true"' : ""}>
