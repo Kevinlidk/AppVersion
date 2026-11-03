@@ -5,3 +5,7 @@ wrangler.generated.toml
 *.log
 .DS_Store
 Thumbs.db
+
+# 工具/编辑器自动生成的临时目录
+.mimosa/
+参考/
