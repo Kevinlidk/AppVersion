@@ -314,6 +314,17 @@
   }
   .diag h3 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
   .diag h3 .diag-time { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: auto; }
+  /* 右上角关闭按钮 */
+  .diag-close {
+    flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0; margin-left: 4px;
+    border: none; border-radius: 7px; background: transparent;
+    color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer;
+    transition: background .15s, color .15s, transform .06s;
+  }
+  .diag-close:hover { background: var(--accent-weak); color: var(--accent); }
+  .diag-close:active { transform: scale(.9); }
+  .diag-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .diag-grid { display: grid; gap: 6px 14px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
   .diag-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .diag-key { color: var(--muted); flex-shrink: 0; }
@@ -2199,7 +2210,10 @@ function renderDiagnostics(d) {
   ).join("");
 
   $("#diagPanel").innerHTML =
-    `<h3>🩺 配置检查<span class="diag-time">${esc(fmtTime(d.checkedAt))}</span></h3>` +
+    `<h3>🩺 配置检查` +
+    `<span class="diag-time">${esc(fmtTime(d.checkedAt))}</span>` +
+    `<button type="button" class="diag-close" id="diagCloseBtn" aria-label="关闭配置检查" title="关闭">✕</button>` +
+    `</h3>` +
     `<div class="diag-grid">${rows.join("")}</div>` +
     (hints ? `<ul class="diag-hints">${hints}</ul>` : "");
   $("#diagPanel").classList.remove("hidden");
@@ -2221,6 +2235,13 @@ $("#diagBtn").addEventListener("click", async () => {
     btn.disabled = false;
     btn.textContent = label;
   }
+});
+
+// 关闭配置检查面板(事件委托:面板每次渲染都会重建)
+$("#diagPanel").addEventListener("click", (e) => {
+  if (!e.target.closest("#diagCloseBtn")) return;
+  $("#diagPanel").classList.add("hidden");
+  $("#diagBtn").focus(); // 焦点回到触发按钮
 });
 
 /* ── Chocolatey → winget 一键转换 ── */
