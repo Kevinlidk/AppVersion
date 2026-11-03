@@ -525,11 +525,19 @@ function normalizeApp(input, base = {}) {
   // 最新版本下载地址
   if (input.downloadUrl !== undefined) out.downloadUrl = validateDownloadUrl(String(input.downloadUrl).trim());
   else if (out.downloadUrl === undefined) out.downloadUrl = "";
-  // 可选的候选下载列表(自动检测时生成):[{name,url,score,kind,arch}]
+  // 可选的候选下载列表(自动检测/刷新时生成):[{name,url,score,kind,arch}]
   if (input.downloads !== undefined) {
     out.downloads = normalizeDownloadList(input.downloads);
   } else if (out.downloads === undefined) {
     out.downloads = [];
+  }
+  // 标记「下载地址是用户手动填的」:后续自动查询不会覆盖它。
+  // 同时提交了非空 downloads 视为来自自动检测,不算手动。
+  if (input.downloadUrl !== undefined) {
+    const autoDetected = Array.isArray(input.downloads) && input.downloads.length > 0;
+    out.manualDownloadUrl = Boolean(out.downloadUrl) && !autoDetected;
+  } else if (out.manualDownloadUrl === undefined) {
+    out.manualDownloadUrl = false;
   }
   if (input.version !== undefined) out.version = String(input.version).trim();
   if (input.note !== undefined) out.note = String(input.note).trim();
@@ -930,6 +938,123 @@ async function fetchChocolateyLatest(packageId) {
  * winget 官方清单仓库(microsoft/winget-pkgs,winget.run 的上游数据源)。
  * 目录结构:manifests/<首字母>/<发布者>/<其余各段…>/<版本目录>。
  */
+/**
+ * 极简 YAML 解析:只处理 winget manifest 用到的结构
+ * (顶层键值、`InstallerType: x` 默认值、`Installers:` 列表)。
+ * 不引入依赖,仅提取 Architecture / InstallerUrl / InstallerType / Scope。
+ */
+function parseWingetInstallerYaml(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const top = {};          // 顶层标量(作为子项默认值)
+  const installers = [];
+  let inInstallers = false;
+  let current = null;
+
+  const unquote = (v) => v.trim().replace(/^["']|["']$/g, "").trim();
+
+  for (const raw of lines) {
+    if (!raw.trim() || /^\s*#/.test(raw)) continue;
+    const indent = raw.match(/^(\s*)/)[1].length;
+    const line = raw.trim();
+
+    // 进入 Installers 段
+    if (/^Installers:\s*$/.test(line)) {
+      inInstallers = true;
+      current = null;
+      continue;
+    }
+
+    if (!inInstallers) {
+      const m = line.match(/^([A-Za-z]+):\s*(.+)$/);
+      if (m && indent === 0) top[m[1]] = unquote(m[2]);
+      continue;
+    }
+
+    // 列表项:可能有 0~2 空格缩进,以 "- " 开头
+    const itemMatch = line.match(/^-\s+([A-Za-z]+):\s*(.*)$/);
+    if (itemMatch) {
+      current = { [itemMatch[1]]: unquote(itemMatch[2]) };
+      installers.push(current);
+      continue;
+    }
+    if (current) {
+      const kv = line.match(/^([A-Za-z]+):\s*(.+)$/);
+      if (kv) current[kv[1]] = unquote(kv[2]);
+    }
+  }
+
+  return installers
+    .filter((it) => it.InstallerUrl)
+    .map((it) => ({
+      arch: (it.Architecture || top.Architecture || "").toLowerCase(),
+      url: it.InstallerUrl,
+      type: (it.InstallerType || it.NestedInstallerType || top.InstallerType || "").toLowerCase(),
+      scope: (it.Scope || top.Scope || "").toLowerCase(),
+    }));
+}
+
+/**
+ * winget 安装包类型 → 展示用 kind。
+ * 优先用 URL 扩展名(最可靠,同一个包可能混用 exe/msi),
+ * 扩展名无法判断时才回退到 manifest 的 InstallerType。
+ */
+function wingetTypeToKind(type, url) {
+  const ext = (String(url || "").match(/\.([a-z0-9]+)(?:\?|$)/i) || [])[1];
+  const e = (ext || "").toLowerCase();
+  if (e === "exe") return "EXE";
+  if (e === "msi") return "MSI";
+  if (e === "msix" || e === "appx") return "MSIX";
+  if (e === "zip") return "ZIP";
+  if (e === "dmg") return "DMG";
+  if (e === "pkg") return "PKG";
+  if (e === "msixbundle") return "MSIX";
+
+  const t = (type || "").toLowerCase();
+  if (t === "nullsoft" || t === "inno" || t === "burn" || t === "exe") return "EXE";
+  if (t === "wix" || t === "msi") return "MSI";
+  if (t === "msix" || t === "appx") return "MSIX";
+  if (t === "portable" || t === "zip") return "ZIP";
+  return e ? e.toUpperCase() : "文件";
+}
+
+/**
+ * 取某个 winget 包在指定版本下的安装包列表(读 installer.yaml)。
+ * 路径:manifests/<首字母>/<发布者>/<其余段…>/<版本>/<PackageId>.installer.yaml
+ */
+async function fetchWingetInstallers(packageId, version, env) {
+  if (!packageId || !version) return [];
+  const parts = packageId.split(".");
+  const dir = `manifests/${packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
+  const file = `${dir}/${version}/${packageId}.installer.yaml`;
+  const url = `https://raw.githubusercontent.com/microsoft/winget-pkgs/master/${file}`;
+  let res;
+  try {
+    res = await fetchWithRetry(url, { headers: { "user-agent": UA } });
+  } catch {
+    return [];
+  }
+  if (!res.ok) return [];
+  const yaml = await res.text();
+  const items = parseWingetInstallerYaml(yaml);
+
+  // 排序:x64 优先 → arm64 → x86 → 其它;同架构内 exe 优先于 msi
+  const archScore = (a) => (a === "x64" ? 30 : a === "arm64" || a === "arm" ? 20 : a === "x86" ? 10 : 0);
+  const kindScore = (k) => (k === "EXE" ? 8 : k === "MSI" ? 7 : k === "MSIX" ? 5 : k === "ZIP" ? 2 : 0);
+  return items
+    .map((it) => {
+      const kind = wingetTypeToKind(it.type, it.url);
+      const name = decodeURIComponent((it.url.split("/").pop() || "").split("?")[0]);
+      return {
+        name,
+        url: it.url,
+        score: archScore(it.arch) + kindScore(kind),
+        kind,
+        arch: it.arch === "arm64" ? "arm" : it.arch,
+      };
+    })
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+}
+
 async function fetchWingetLatest(packageId, env) {
   const parts = packageId.split(".");
   const dir = `manifests/${packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
@@ -945,11 +1070,18 @@ async function fetchWingetLatest(packageId, env) {
   const versions = (Array.isArray(entries) ? entries : [])
     .filter((e) => e && e.type === "dir")
     .map((e) => e.name);
-  if (!versions.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);  const latest = versions.sort(compareVersions)[versions.length - 1];
+  if (!versions.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);
+  const latest = versions.sort(compareVersions)[versions.length - 1];
+
+  // 读取该版本的 installer.yaml,取出各架构下载地址作为下载候选
+  const downloads = await fetchWingetInstallers(packageId, latest, env);
+  const best = downloads.find((d) => d.url);
+
   return {
     version: latest,
-    releaseUrl: `https://github.com/microsoft/winget-pkgs/tree/master/${dir}`,
+    releaseUrl: best ? best.url : `https://github.com/microsoft/winget-pkgs/tree/master/${dir}`,
     publishedAt: null,
+    downloads,
   };
 }
 
@@ -1082,8 +1214,14 @@ function applyLatest(app, latest) {
   app.releaseUrl = latest.releaseUrl;
   app.publishedAt = latest.publishedAt;
   app.lastCheckedAt = nowIso();
-  // GitHub 渠道的刷新会附带最新 Release 的安装包候选,同步更新下载菜单
-  if (Array.isArray(latest.downloads)) app.downloads = latest.downloads;
+  // GitHub Releases / winget 清单的刷新都会附带安装包候选,同步更新下载菜单
+  if (Array.isArray(latest.downloads)) {
+    app.downloads = latest.downloads;
+    // 用户没手动指定下载地址时,用候选里的首选(已按架构/类型排好序)
+    if (!app.manualDownloadUrl && latest.downloads.length) {
+      app.downloadUrl = latest.downloads[0].url;
+    }
+  }
 }
 
 /* ─────────────── 通知推送 ─────────────── */
@@ -1588,8 +1726,18 @@ async function handleApi(request, env, pathname) {
       }
     } else if (draft.channel === "winget" && draft.packageId) {
       out.appUrl = "https://winget.run/pkg/" + draft.packageId.replace(".", "/");
-      out.downloadUrl = out.appUrl;
       out.source = "winget";
+      // 读取清单里的 installer.yaml,拿到各架构的真实下载地址
+      try {
+        const latest = await fetchWingetLatest(draft.packageId, env);
+        out.downloads = latest.downloads || [];
+        out.downloadUrl = out.downloads.length ? out.downloads[0].url : out.appUrl;
+        out.detectedVersion = latest.version;
+        if (out.downloads.length) out.source = "winget-installer";
+      } catch {
+        // 查询失败时退回包页面
+        out.downloadUrl = out.appUrl;
+      }
     } else if (draft.channel === "chocolatey" && draft.packageId) {
       out.appUrl = `${CHOCO_HOST}/packages/${encodeURIComponent(draft.packageId)}`;
       out.downloadUrl = out.appUrl;

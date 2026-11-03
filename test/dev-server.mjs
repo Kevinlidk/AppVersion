@@ -57,6 +57,25 @@ globalThis.fetch = async (input, init) => {
       { status: 200, headers: { "content-type": "application/json" } }
     );
   }
+  // 演示用 installer.yaml:提供 x64/arm/x86 三种架构的下载地址
+  if (u.startsWith("https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/")) {
+    const yaml = [
+      "PackageIdentifier: VideoLAN.VLC",
+      "PackageVersion: 9.9.9",
+      "InstallerType: nullsoft",
+      "Installers:",
+      "  - Architecture: x86",
+      "    InstallerUrl: https://dl.example.com/vlc-9.9.9-win32.exe",
+      "  - Architecture: x64",
+      "    InstallerUrl: https://dl.example.com/vlc-9.9.9-win64.exe",
+      "  - Architecture: x64",
+      "    InstallerUrl: https://dl.example.com/vlc-9.9.9-win64.msi",
+      "  - Architecture: arm64",
+      "    InstallerUrl: https://dl.example.com/vlc-9.9.9-winarm64.exe",
+      "ManifestType: installer",
+    ].join("\n");
+    return new Response(yaml, { status: 200, headers: { "content-type": "text/plain" } });
+  }
   if (u.startsWith("https://api.github.com/") && u.includes("/releases")) {
     return new Response(
       JSON.stringify({

@@ -57,6 +57,24 @@ globalThis.fetch = async (input, init) => {
     }
     return new Response(JSON.stringify(wingetEntries), { status: 200, headers: { "content-type": "application/json" } });
   }
+  // installer.yaml:模拟 winget 清单(含 x64/arm/x86 三种架构与 exe/msi 两种类型)
+  if (u.startsWith("https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/")) {
+    if (wingetMode === "notfound") return new Response("Not Found", { status: 404 });
+    const yaml = [
+      "PackageIdentifier: VideoLAN.VLC",
+      "PackageVersion: 9.10.0",
+      "InstallerType: nullsoft",
+      "Installers:",
+      "  - Architecture: x86",
+      "    InstallerUrl: https://dl.example.com/vlc-win32.exe",
+      "  - Architecture: x64",
+      "    InstallerUrl: https://dl.example.com/vlc-win64.exe",
+      "  - Architecture: arm64",
+      "    InstallerUrl: https://dl.example.com/vlc-winarm64.exe",
+      "ManifestType: installer",
+    ].join("\n");
+    return new Response(yaml, { status: 200, headers: { "content-type": "text/plain" } });
+  }
   if (u.startsWith("https://community.chocolatey.org/api/v2/package/")) {
     if (chocoMode === "blocked") {
       return new Response("Forbidden", { status: 403 });
@@ -425,7 +443,10 @@ await test("POST 新增 winget 应用并查询:多段版本号正确排序取最
   assertEq(res.status, 200, "状态码");
   const app = await bodyOf(res);
   assertEq(app.latestVersion, "9.10.0", "版本排序(9.10.0 > 9.9.9)");
-  if (!/winget-pkgs\/tree\/master\/manifests\/v\/VideoLAN\/VLC$/.test(app.releaseUrl)) throw new Error("releaseUrl 不符: " + app.releaseUrl);
+  // 有了 installer.yaml 后,releaseUrl 会优先指向首选安装包地址
+  if (!/vlc-win64\.exe$/.test(app.releaseUrl) && !/winget-pkgs\/tree\/master\/manifests\/v\/VideoLAN\/VLC$/.test(app.releaseUrl)) {
+    throw new Error("releaseUrl 不符合预期: " + app.releaseUrl);
+  }
 });
 
 await test("官方自查:Chrome 风格响应按 releases.0.version 取值", async () => {
@@ -627,7 +648,11 @@ await test("detect-links:Chocolatey/winget 渠道可推导页面地址;未登录
   assertEq(c.appUrl, "https://community.chocolatey.org/packages/vlc", "choco 页面");
 
   const w = await bodyOf(await call("/api/apps/detect-links", post({ channel: "winget", packageId: "VideoLAN.VLC" })));
-  assertEq(w.source, "winget", "winget 来源");
+  // 能解析到 installer.yaml 时 source 为 winget-installer(带真实下载地址),
+  // 解析不到时退回 winget(仅包页面)
+  if (!["winget", "winget-installer"].includes(w.source)) {
+    throw new Error("winget 来源异常: " + w.source);
+  }
 });
 
 /* ── A1/A3/A4 修复与 A2 同步验证 ── */
@@ -726,6 +751,53 @@ await test("diagnostics:未配置 GITHUB_TOKEN 时给出告警", async () => {
   if (!d.hints.some((h) => h.level === "warn" && /GITHUB_TOKEN/.test(h.text))) {
     throw new Error("缺少 GITHUB_TOKEN 告警");
   }
+});
+
+/* ── winget installer.yaml → 下载候选 ── */
+
+await test("winget 刷新:从 installer.yaml 解析各架构下载地址", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "VLC", channel: "winget", packageId: "VideoLAN.VLC",
+  })));
+  const res = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "状态码");
+  const app = await bodyOf(res);
+
+  if (!Array.isArray(app.downloads)) throw new Error("downloads 不是数组");
+  assertEq(app.downloads.length >= 3, true, "至少 3 个候选");
+  // x64 应排在最前(排序:x64 > arm > x86,EXE > MSI)
+  assertEq(app.downloads[0].arch, "x64", "首选 x64");
+  assertEq(app.downloads[0].kind, "EXE", "首选 EXE");
+  if (!app.downloads.every((d) => d.url && d.name)) throw new Error("候选缺少 url/name");
+  // downloadUrl 应被自动写为候选首选
+  assertEq(app.downloadUrl, app.downloads[0].url, "downloadUrl 同步为首选");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("winget 刷新:顶层 InstallerType 作为子项默认值被继承", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "Edge", channel: "winget", packageId: "Microsoft.Edge",
+  })));
+  const res = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "状态码");
+  const app = await bodyOf(res);
+  // 子项未写 InstallerType,应继承顶层的 nullsoft → 识别为 EXE
+  if (app.downloads.length) {
+    assertEq(app.downloads.every((d) => d.kind === "EXE"), true, "继承顶层类型");
+    assertEq(app.downloads[0].arch, "x64", "首选 x64");
+  }
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("手动填写的下载地址不会被自动查询覆盖", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "VLC", channel: "winget", packageId: "VideoLAN.VLC",
+    downloadUrl: "https://my.example.com/custom.exe",
+  })));
+  assertEq(a.manualDownloadUrl, true, "标记为手动");
+  const r = await bodyOf(await call("/api/apps/" + a.id + "/refresh", { method: "POST" }));
+  assertEq(r.downloadUrl, "https://my.example.com/custom.exe", "手动地址保持不变");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 
 /* ── Chocolatey → winget 转换 ── */
