@@ -17,6 +17,7 @@
     - 自动在 `microsoft/winget-pkgs` 中搜索候选(应用名 / 包 ID 代码搜索 + 由官网域名推导的启发式 ID)
     - 候选会**逐个校验是否真实存在于清单仓库**,只列出可用的包并显示其最新版本
     - 若没有候选(或想用别的包),**可直接在弹窗里手动输入 winget 包 ID**(如 `VideoLAN.VLC`),输入格式合法时「转换」按钮自动变为可用
+    - 输入框下方提供 **「在 winget 仓库中查找包 ID ↗」** 链接,直达 `microsoft/winget-pkgs/manifests` 目录便于按发布者查找
     - 选中后立即切换渠道并拉取版本;旧渠道的查询缓存与推送标记会自动清空
     - 需要 `GITHUB_TOKEN` 具备只读 Contents 权限(代码搜索接口要求)
 
@@ -41,6 +42,9 @@
 - 🎁 **开箱示例** —— 首次访问自动内置「Google Chrome」示例应用(Chocolatey 渠道,可自动查询);登录后可编辑或删除,清空后不会重复注入
 - 🖼 **应用图标** —— 按优先级自动匹配:
   1. 表单里手填的「图标地址」(自定义)
+     - 支持完整 `https://` 图片地址
+     - **也支持粘贴 Iconify 图标名简写**(如 `thesvg-color:vlc-media-player`),失焦时自动补全为 `https://api.iconify.design/{集}/{名}.svg`
+     - 图标名下方提供 [icon-sets.iconify.design](https://icon-sets.iconify.design/) 与 [yesicon.app](https://yesicon.app/) 快捷搜索入口(新标签页打开)
   2. **按应用名称在多个 Iconify 图标集中级联匹配**(数据源与 [icon-sets.iconify.design](https://icon-sets.iconify.design/) / [yesicon.app](https://yesicon.app/) 同源,无需本地存储):
      - `selfhst` —— 自托管应用图标集,7000+ 全彩图标,覆盖最广
      - `logos` —— 品牌 logo 集,多色渐变

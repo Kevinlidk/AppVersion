@@ -299,6 +299,38 @@ await test("POST refresh:GitHub 查询最新版本并更新记录", async () => 
   assertEq(app.notifiedVersion, "v2.0.0", "手动刷新后记录 notifiedVersion");
 });
 
+await test("iconUrl:支持 Iconify 简写 prefix:name,自动转为图标 URL", async () => {
+  // 简写应被转换为 api.iconify.design 地址
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "简写图标", channel: "manual", iconUrl: "thesvg-color:vlc-media-player",
+  })));
+  assertEq(
+    a.iconUrl,
+    "https://api.iconify.design/thesvg-color/vlc-media-player.svg",
+    "简写转换"
+  );
+
+  // 大小写混写也能识别
+  const b = await bodyOf(await call("/api/apps", post({
+    name: "简写图标2", channel: "manual", iconUrl: "Selfhst:7-Zip",
+  })));
+  assertEq(b.iconUrl, "https://api.iconify.design/selfhst/7-zip.svg", "大小写归一");
+
+  // 完整 https URL 保持原样
+  const c = await bodyOf(await call("/api/apps", post({
+    name: "完整图标", channel: "manual", iconUrl: "https://cdn.example.com/i.png",
+  })));
+  assertEq(c.iconUrl, "https://cdn.example.com/i.png", "完整 URL 不变");
+
+  // 非法输入仍应拒绝
+  assertEq(
+    (await call("/api/apps", post({ name: "X", channel: "manual", iconUrl: "not a url:with space" }))).status,
+    400, "非法格式"
+  );
+
+  for (const x of [a, b, c]) await call("/api/apps/" + x.id, { method: "DELETE" });
+});
+
 await test("iconUrl:可自定义图标地址,非 https 拒绝,留空则为空串", async () => {
   const ok = await bodyOf(await call("/api/apps", post({
     name: "带图标", channel: "manual", version: "1.0",

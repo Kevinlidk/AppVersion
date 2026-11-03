@@ -283,12 +283,30 @@ function validateOfficialUrl(raw) {
 }
 
 /** 校验自定义图标地址:公网 https 图片地址 */
+/**
+ * 校验自定义图标地址。
+ * 支持 Iconify 简写 `prefix:name`(如 thesvg-color:vlc-media-player),
+ * 会自动转换成 https://api.iconify.design/{prefix}/{name}.svg,
+ * 方便从 icon-sets.iconify.design / yesicon.app 复制图标名后直接粘贴。
+ */
 function validateIconUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+
+  // Iconify 简写:prefix:name(两侧均为小写字母/数字/短横线)
+  const shorthand = value.match(/^([a-z0-9][a-z0-9-]*):([a-z0-9][a-z0-9.-]*)$/i);
+  if (shorthand) {
+    const [, prefix, name] = shorthand;
+    return `https://api.iconify.design/${encodeURIComponent(prefix.toLowerCase())}/${encodeURIComponent(name.toLowerCase())}.svg`;
+  }
+
   let u;
   try {
-    u = new URL(raw);
+    u = new URL(value);
   } catch {
-    throw new ApiError("图标地址格式不正确,应为完整 URL");
+    throw new ApiError(
+      "图标地址格式不正确:请填写完整 URL(https://…),或 Iconify 图标名(如 thesvg-color:vlc-media-player)"
+    );
   }
   if (u.protocol !== "https:") throw new ApiError("图标地址必须使用 https://");
   return u.href;
