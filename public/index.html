@@ -305,6 +305,32 @@
   .editbar .hint-inline { font-size: 12.5px; margin: 0 auto 0 0; }
   .editbar .btn { min-height: 34px; font-size: 13px; }
 
+  /* ── 配置诊断面板 ── */
+  .diag {
+    margin-top: 10px; padding: 14px 16px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow);
+    font-size: 13px;
+  }
+  .diag h3 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .diag h3 .diag-time { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: auto; }
+  .diag-grid { display: grid; gap: 6px 14px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+  .diag-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .diag-key { color: var(--muted); flex-shrink: 0; }
+  .diag-val { font-weight: 600; overflow-wrap: anywhere; }
+  .diag-val.ok { color: var(--ok); }
+  .diag-val.bad { color: var(--danger); }
+  .diag-hints { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .diag-hint {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 7px 10px; border-radius: 8px; line-height: 1.45;
+  }
+  .diag-hint.ok { background: var(--ok-bg); color: var(--ok); }
+  .diag-hint.warn { background: var(--warn-bg); color: var(--warn); }
+  .diag-hint.error { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+  .diag-hint.info { background: var(--accent-weak); color: var(--accent); }
+  .diag-hint .ico { flex-shrink: 0; font-weight: 700; }
+
   /* ── 应用卡片 ── */
   /* 列表容器装的是「分组」,单个分组占满一行;卡片网格在 .group-body 里 */
   .list { display: block; margin-top: 12px; }
@@ -540,8 +566,12 @@
   <div id="editBar" class="editbar hidden">
     <span class="hint-inline">编辑模式:可拖动卡片/分组排序(手机端用 ↑↓ 与下拉选择)</span>
     <button id="addGroupBtn" class="btn primary">＋ 新建分组</button>
+    <button id="diagBtn" class="btn">🩺 配置检查</button>
     <button id="exitEditBtn" class="btn">完成</button>
   </div>
+
+  <!-- 配置诊断结果(仅管理员,点击「配置检查」后出现) -->
+  <div id="diagPanel" class="diag hidden"></div>
 
   <!-- 列表容器:分组由 render() 动态生成 -->
   <div id="list" class="list"></div>
@@ -741,6 +771,7 @@ function renderAdminUi() {
   $("#manageRow").classList.toggle("hidden", !isAdmin);
   if (!isAdmin && editMode) editMode = false;
   $("#editBar").classList.toggle("hidden", !(isAdmin && editMode));
+  if (!(isAdmin && editMode)) $("#diagPanel").classList.add("hidden");
   $("#editModeBtn").textContent = editMode ? "✎ 编辑中…" : "✎ 编辑布局";
   render();
 }
@@ -1794,6 +1825,7 @@ function setEditMode(on) {
   editMode = on && isAdmin;
   $("#editBar").classList.toggle("hidden", !editMode);
   $("#editModeBtn").textContent = editMode ? "✎ 编辑中…" : "✎ 编辑布局";
+  if (!editMode) $("#diagPanel").classList.add("hidden");
   render();
 }
 
@@ -2032,6 +2064,66 @@ listEl.addEventListener("drop", async (e) => {
     }
     dragGroupId = null;
     render();
+  }
+});
+
+/* ── 配置诊断面板 ── */
+
+const DIAG_ICONS = { ok: "✓", warn: "!", error: "✕", info: "i" };
+
+function diagRow(label, value, good) {
+  const cls = good === undefined ? "" : good ? " ok" : " bad";
+  return `<div class="diag-row"><span class="diag-key">${esc(label)}</span>` +
+    `<span class="diag-val${cls}">${esc(value)}</span></div>`;
+}
+
+function renderDiagnostics(d) {
+  const c = d.config;
+  const g = d.github;
+  const notifyNames = Object.entries(c.notify).filter(([, v]) => v).map(([k]) => k);
+  const ghValue = !c.githubToken
+    ? "未配置"
+    : (g.ok && g.authenticated ? `生效中 · 剩余 ${g.remaining}/${g.limit}` : (g.ok ? `已设置但未生效(限额 ${g.limit})` : `已设置(查验失败:${g.error || "未知"})`));
+
+  const rows = [
+    diagRow("KV 存储", c.kv ? "已绑定" : "未绑定", c.kv),
+    diagRow("管理员密码", c.adminPassword ? "已配置" : "未配置", c.adminPassword),
+    diagRow("定时检查令牌", c.cronSecret ? "已配置" : "未配置", c.cronSecret),
+    diagRow("GitHub 令牌", ghValue, Boolean(c.githubToken && g.ok && g.authenticated)),
+    diagRow("通知渠道", notifyNames.length ? notifyNames.join(" / ") : "未配置", notifyNames.length ? true : undefined),
+    diagRow("应用 / 分组", `${d.data.apps} / ${d.data.groups}`, true),
+  ];
+  if (g.ok && g.resetAt) {
+    const t = new Date(g.resetAt);
+    rows.push(diagRow("额度重置", t.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })));
+  }
+
+  const hints = (d.hints || []).map((h) =>
+    `<li class="diag-hint ${esc(h.level)}"><span class="ico" aria-hidden="true">${DIAG_ICONS[h.level] || "i"}</span><span>${esc(h.text)}</span></li>`
+  ).join("");
+
+  $("#diagPanel").innerHTML =
+    `<h3>🩺 配置检查<span class="diag-time">${esc(fmtTime(d.checkedAt))}</span></h3>` +
+    `<div class="diag-grid">${rows.join("")}</div>` +
+    (hints ? `<ul class="diag-hints">${hints}</ul>` : "");
+  $("#diagPanel").classList.remove("hidden");
+}
+
+$("#diagBtn").addEventListener("click", async () => {
+  const btn = $("#diagBtn");
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "检查中…";
+  try {
+    const d = await api("/api/diagnostics");
+    renderDiagnostics(d);
+    const bad = (d.hints || []).filter((h) => h.level === "error").length;
+    toast(bad ? `检查完成,发现 ${bad} 项问题` : "检查完成,配置正常", bad ? "error" : undefined);
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
 });
 

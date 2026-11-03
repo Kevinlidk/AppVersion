@@ -652,6 +652,49 @@ await test("A2: refresh 同步更新 downloads 候选列表", async () => {
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 
+await test("diagnostics:仅管理员可访问,返回配置状态与 GitHub 额度", async () => {
+  // 未登录 401
+  const anon = await worker.fetch(new Request("http://localhost/api/diagnostics"), env, ctx);
+  assertEq(anon.status, 401, "未登录状态码");
+
+  // 用一个带 GITHUB_TOKEN 的环境,验证能识别出"已配置"
+  const envD = {
+    APP_KV: makeKV(), ADMIN_PASSWORD: "pd", CRON_SECRET: "cd",
+    GITHUB_TOKEN: "ghp_faketoken123",
+    FEISHU_WEBHOOK_URL: "https://x/hook",
+  };
+  const { cookie } = await loginAs(envD, "pd");
+  const res = await worker.fetch(
+    new Request("http://localhost/api/diagnostics", { headers: { cookie: "av_session=" + cookie } }),
+    envD, ctx
+  );
+  assertEq(res.status, 200, "状态码");
+  const d = await bodyOf(res);
+
+  assertEq(d.config.kv, true, "KV");
+  assertEq(d.config.githubToken, true, "token 已配置");
+  if (!/长度 \d+/.test(d.config.githubTokenHint)) throw new Error("token 提示应含长度但不泄露内容");
+  if (d.config.githubTokenHint.includes("ghp_faketoken123")) throw new Error("不应泄露 token 明文");
+  assertEq(d.config.cronSecret, true, "cron secret");
+  assertEq(d.config.notify.feishu, true, "飞书渠道");
+  assertEq(d.config.notify.telegram, false, "telegram 未配置");
+  if (!Array.isArray(d.hints)) throw new Error("缺少 hints");
+});
+
+await test("diagnostics:未配置 GITHUB_TOKEN 时给出告警", async () => {
+  const envE = { APP_KV: makeKV(), ADMIN_PASSWORD: "pe" };
+  const { cookie } = await loginAs(envE, "pe");
+  const res = await worker.fetch(
+    new Request("http://localhost/api/diagnostics", { headers: { cookie: "av_session=" + cookie } }),
+    envE, ctx
+  );
+  const d = await bodyOf(res);
+  assertEq(d.config.githubToken, false, "token 未配置");
+  if (!d.hints.some((h) => h.level === "warn" && /GITHUB_TOKEN/.test(h.text))) {
+    throw new Error("缺少 GITHUB_TOKEN 告警");
+  }
+});
+
 /* ── 分组与布局 ── */
 
 await test("分组:创建/重命名/删除,删除后组内应用回到未分组", async () => {

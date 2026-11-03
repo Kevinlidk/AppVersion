@@ -963,6 +963,40 @@ async function runUpdateCheck(env) {
   };
 }
 
+/** 根据配置与额度生成可读的诊断建议 */
+function buildDiagHints(config, github) {
+  const hints = [];
+  if (!config.kv) hints.push({ level: "error", text: "APP_KV 未绑定,应用数据无法保存" });
+  if (!config.adminPassword) hints.push({ level: "error", text: "ADMIN_PASSWORD 未配置,编辑接口会全部拒绝" });
+  if (!config.cronSecret) hints.push({ level: "warn", text: "CRON_SECRET 未配置,GitHub Actions 将无法触发检查" });
+
+  if (!config.githubToken) {
+    hints.push({ level: "warn", text: "GITHUB_TOKEN 未配置:GitHub / winget 渠道与自动检测依赖匿名额度(60 次/小时/IP),共享出口 IP 极易耗尽" });
+  } else if (!github.ok) {
+    // 配置了但额度查验失败(常见于令牌无效/过期,GitHub 返回 401)
+    const detail = github.error || "未知错误";
+    hints.push({
+      level: "error",
+      text: `GITHUB_TOKEN 已设置但校验失败(${detail}):令牌可能已过期、被撤销或填写有误。请到 GitHub 重新生成并更新密钥`,
+    });
+  } else if (!github.authenticated) {
+    hints.push({
+      level: "error",
+      text: `GITHUB_TOKEN 已设置但 GitHub 未识别(限额 ${github.limit}/小时):令牌可能已过期、被撤销,或填入了多余空格/引号。请重新生成并更新密钥`,
+    });
+  } else {
+    hints.push({ level: "ok", text: `GITHUB_TOKEN 生效,剩余额度 ${github.remaining}/${github.limit}` });
+  }
+
+  if (github.ok && github.remaining !== null && github.remaining < 100) {
+    hints.push({ level: "warn", text: "GitHub 剩余额度偏低,建议检查是否有其他程序共用该令牌" });
+  }
+  const notifyCount = Object.values(config.notify).filter(Boolean).length;
+  if (!notifyCount) hints.push({ level: "info", text: "未配置任何通知渠道,发现新版本时只在页面展示,不会推送" });
+
+  return hints;
+}
+
 /* ─────────────── 路由 ─────────────── */
 
 export default {
@@ -1130,6 +1164,58 @@ async function handleApi(request, env, pathname) {
 
   /* ── 自动检测应用的官网与下载地址(需管理员)──
      来源优先级:GitHub Releases(主页/资产) → winget 清单 → Chocolatey 包页面 */
+  /* ── 配置诊断(仅管理员):确认密钥/绑定是否真的生效,并实时查验 GitHub 额度 ── */
+  if (pathname === "/api/diagnostics" && method === "GET") {
+    await requireAdmin(env, request);
+
+    const mask = (v) => (v ? `已配置(长度 ${String(v).length})` : "未配置");
+    const config = {
+      kv: Boolean(env && env.APP_KV),
+      adminPassword: Boolean(env && env.ADMIN_PASSWORD),
+      cronSecret: Boolean(env && env.CRON_SECRET),
+      githubToken: Boolean(env && env.GITHUB_TOKEN),
+      githubTokenHint: mask(env && env.GITHUB_TOKEN),
+      notify: {
+        feishu: Boolean(env && env.FEISHU_WEBHOOK_URL),
+        telegram: Boolean(env && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
+        bark: Boolean(env && env.BARK_URL),
+        serverchan: Boolean(env && env.SERVERCHAN_SENDKEY),
+        webhook: Boolean(env && env.NOTIFY_WEBHOOK_URL),
+      },
+    };
+
+    // 实时查验 GitHub 额度:这是判断 GITHUB_TOKEN 是否真生效的唯一可靠方式
+    const github = { ok: false, authenticated: false, remaining: null, limit: null, resetAt: null, error: null };
+    try {
+      const res = await fetch("https://api.github.com/rate_limit", { headers: await ghHeaders(env) });
+      if (res.ok) {
+        const data = await res.json();
+        const core = (data.resources && data.resources.core) || {};
+        github.ok = true;
+        github.remaining = core.remaining ?? null;
+        github.limit = core.limit ?? null;
+        // 认证请求限额 5000,匿名 60 —— 用限额反推 token 是否被 GitHub 认可
+        github.authenticated = (core.limit ?? 0) > 60;
+        github.resetAt = core.reset ? new Date(core.reset * 1000).toISOString() : null;
+      } else {
+        github.error = `HTTP ${res.status}`;
+      }
+    } catch (e) {
+      github.error = (e && e.message) || "请求失败";
+    }
+
+    // 数据量概览,便于确认 KV 读写正常
+    const [list, groups] = await Promise.all([readApps(env), readGroups(env)]);
+
+    return json({
+      checkedAt: nowIso(),
+      config,
+      github,
+      data: { apps: list.length, groups: groups.length },
+      hints: buildDiagHints(config, github),
+    });
+  }
+
   if (pathname === "/api/apps/detect-links" && method === "POST") {
     await requireAdmin(env, request);
     const body = await readJson(request);

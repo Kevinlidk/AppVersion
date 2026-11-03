@@ -27,6 +27,13 @@ const env = {
   CHECK_GAP_MS: "10",
   ADMIN_PASSWORD,
   CRON_SECRET,
+  // 透传可选环境变量,便于本地验证真实链路(未设置时为 undefined,等同于未配置)
+  GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+  FEISHU_WEBHOOK_URL: process.env.FEISHU_WEBHOOK_URL,
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
+  BARK_URL: process.env.BARK_URL,
+  SERVERCHAN_SENDKEY: process.env.SERVERCHAN_SENDKEY,
   APP_KV: {
     async get(k) { return kvStore.has(k) ? kvStore.get(k) : null; },
     async put(k, v) { kvStore.set(k, String(v)); },
