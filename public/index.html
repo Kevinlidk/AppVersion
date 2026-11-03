@@ -349,6 +349,17 @@
   .winget-opt-id { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
   .winget-opt-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .winget-empty { font-size: 13px; color: var(--muted); padding: 10px 0; text-align: center; }
+  .winget-manual {
+    display: block; margin-top: 14px;
+    font-size: 13px; font-weight: 600; color: var(--muted);
+  }
+  .winget-manual input {
+    width: 100%; margin-top: 6px; min-height: 40px;
+    border-radius: 10px; border: 1px solid var(--border);
+    background: var(--input-bg); color: var(--text);
+    padding: 8px 12px; font-size: 15px;
+  }
+  .winget-manual input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
   /* ── 应用卡片 ── */
   /* 列表容器装的是「分组」,单个分组占满一行;卡片网格在 .group-body 里 */
@@ -716,6 +727,11 @@
   <h2>转换为 winget 渠道</h2>
   <p class="hint" id="wingetHint">正在搜索对应的 winget 包…</p>
   <div id="wingetCandidates" class="winget-list"></div>
+  <!-- 手动输入包 ID:候选为空或想用其他包时可直接填写 -->
+  <label class="winget-manual">或手动输入 winget 包 ID
+    <input id="wingetManualInput" maxlength="120" autocomplete="off" spellcheck="false"
+           autocapitalize="off" placeholder="如:VideoLAN.VLC">
+  </label>
   <div class="dlg-actions">
     <button type="button" class="btn ghost" id="wingetCancelBtn">取消</button>
     <button type="button" class="btn primary" id="wingetConfirmBtn" disabled>转换</button>
@@ -2219,9 +2235,10 @@ function renderWingetCandidates(data, appName) {
     const why = (data.errors || []).length
       ? esc(data.errors.join(";"))
       : "没有找到匹配的 winget 包";
-    box.innerHTML = `<p class="winget-empty">${why}<br>可关闭此窗口后直接在编辑里手动填写 winget 包 ID</p>`;
-    $("#wingetConfirmBtn").disabled = true;
-    $("#wingetHint").textContent = "未找到候选";
+    box.innerHTML = `<p class="winget-empty">${why}<br>可在下方手动输入包 ID</p>`;
+    $("#wingetHint").textContent = "未找到候选,可手动输入";
+    // 有手动输入时按钮可用性由输入框决定
+    syncWingetConfirmState();
     return;
   }
   box.innerHTML = list.map((c, i) => `
@@ -2232,8 +2249,8 @@ function renderWingetCandidates(data, appName) {
         <span class="winget-opt-sub">${c.version ? "最新 " + esc(c.version) : "版本未知"}${c.verified ? " · 已确认存在" : ""}</span>
       </span>
     </label>`).join("");
-  $("#wingetConfirmBtn").disabled = false;
-  $("#wingetHint").textContent = `为「${appName}」找到 ${list.length} 个候选,请选择要使用的 winget 包:`;
+  $("#wingetHint").textContent = `为「${appName}」找到 ${list.length} 个候选,请选择要使用的 winget 包(也可在下方手动输入):`;
+  syncWingetConfirmState();
   box.querySelectorAll('input[name="wingetPick"]').forEach((r) => {
     r.addEventListener("change", () => {
       box.querySelectorAll(".winget-opt").forEach((l) => l.classList.remove("selected"));
@@ -2246,6 +2263,7 @@ async function convertToWinget(appId, btn) {
   wingetTargetId = appId;
   const app = apps.find((a) => a.id === appId);
   $("#wingetCandidates").innerHTML = "";
+  $("#wingetManualInput").value = "";
   $("#wingetHint").textContent = "正在搜索对应的 winget 包…";
   $("#wingetConfirmBtn").disabled = true;
   wingetDlg.showModal();
@@ -2263,11 +2281,36 @@ async function convertToWinget(appId, btn) {
 
 $("#wingetCancelBtn").addEventListener("click", () => wingetDlg.close());
 bindBackdropClose(wingetDlg);
-enhanceDialog(wingetDlg, "#wingetConfirmBtn");
+enhanceDialog(wingetDlg, "#wingetManualInput");
+
+/** 转换按钮可用性:选中候选 或 手动输入了合法格式的包 ID */
+function syncWingetConfirmState() {
+  const manual = $("#wingetManualInput").value.trim();
+  const picked = wingetDlg.querySelector('input[name="wingetPick"]:checked');
+  const okManual = /^[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+$/.test(manual);
+  // 手动输入优先:填了就用输入的值
+  $("#wingetConfirmBtn").disabled = !(okManual || (!manual && picked));
+}
+
+$("#wingetManualInput").addEventListener("input", () => {
+  const manual = $("#wingetManualInput").value.trim();
+  // 开始手动输入时,取消候选的选中视觉,避免歧义
+  wingetDlg.querySelectorAll(".winget-opt").forEach((l) => l.classList.toggle("selected", !manual && l.querySelector("input")?.checked));
+  syncWingetConfirmState();
+});
+// 选中候选时清空手动输入(两者互斥,以手动输入优先判定)
+wingetDlg.addEventListener("change", (e) => {
+  if (e.target.matches('input[name="wingetPick"]')) {
+    $("#wingetManualInput").value = "";
+    syncWingetConfirmState();
+  }
+});
 
 $("#wingetConfirmBtn").addEventListener("click", async () => {
+  const manual = $("#wingetManualInput").value.trim();
   const picked = wingetDlg.querySelector('input[name="wingetPick"]:checked');
-  if (!picked || !wingetTargetId) return;
+  const packageId = manual || (picked ? picked.value : "");
+  if (!packageId || !wingetTargetId) return;
   const btn = $("#wingetConfirmBtn");
   btn.disabled = true;
   const label = btn.textContent;
@@ -2275,7 +2318,7 @@ $("#wingetConfirmBtn").addEventListener("click", async () => {
   try {
     const r = await api(`/api/apps/${wingetTargetId}/convert-to-winget`, {
       method: "POST",
-      body: { packageId: picked.value },
+      body: { packageId },
     });
     apps = apps.map((a) => (a.id === r.app.id ? r.app : a));
     wingetDlg.close();

@@ -16,6 +16,7 @@
   - **⇄ Chocolatey → winget 一键转换**:Chocolatey 应用卡片上提供转换按钮。若 Chocolatey 被 Cloudflare WAF 拦截(见下方说明),可一键改用它对应的 winget 包
     - 自动在 `microsoft/winget-pkgs` 中搜索候选(应用名 / 包 ID 代码搜索 + 由官网域名推导的启发式 ID)
     - 候选会**逐个校验是否真实存在于清单仓库**,只列出可用的包并显示其最新版本
+    - 若没有候选(或想用别的包),**可直接在弹窗里手动输入 winget 包 ID**(如 `VideoLAN.VLC`),输入格式合法时「转换」按钮自动变为可用
     - 选中后立即切换渠道并拉取版本;旧渠道的查询缓存与推送标记会自动清空
     - 需要 `GITHUB_TOKEN` 具备只读 Contents 权限(代码搜索接口要求)
 
