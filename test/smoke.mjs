@@ -73,7 +73,8 @@ globalThis.fetch = async (input, init) => {
     }
     return new Response("", { status: 200 });
   }
-  if (u.startsWith("https://community.chocolatey.org/api/v2/Packages()")) {
+  if (u.startsWith("https://community.chocolatey.org/api/v2/Packages()") ||
+      u.startsWith("https://community.chocolatey.org/api/v2/FindPackagesById()")) {
     if (chocoMode === "blocked") return new Response("Forbidden", { status: 403 });
     if (chocoMode === "notfound") {
       return new Response('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>', { status: 200, headers: { "content-type": "application/atom+xml" } });

@@ -622,31 +622,73 @@ async function fetchWithRetry(url, opts, attempts = 3) {
 }
 
 const CHOCO_BLOCKED_MSG =
-  "Chocolatey 拒绝访问(HTTP 403):所在网络出口可能被其 WAF 拦截,请稍后重试;" +
-  "若持续失败,可改用 winget 渠道(同一应用通常也有 winget 包)";
+  "Chocolatey 拒绝访问(HTTP 403):Cloudflare Workers 的出口 IP 被其 WAF 拦截(Chocolatey 本身也托管在 Cloudflare 上)。" +
+  "同一域名/同一 Worker 无法绕过;建议改用 winget 渠道,或在诊断面板查看 Worker 侧实测结果";
+
+/** Chocolatey 候选端点(按请求体积从小到大) */
+function chocoEndpointList(packageId) {
+  const id = encodeURIComponent(packageId);
+  const filter = `(Id eq '${packageId.replace(/'/g, "''")}') and IsLatestVersion`;
+  return [
+    {
+      name: "package-redirect",
+      label: "302 重定向读取版本(最轻量)",
+      url: `${CHOCO_HOST}/api/v2/package/${id}`,
+      opts: { headers: CHOCO_HEADERS, redirect: "manual" },
+      parse: "redirect",
+    },
+    {
+      name: "odata-latest",
+      label: "OData 查询最新版",
+      url: `${CHOCO_HOST}/api/v2/Packages()?$filter=${encodeURIComponent(filter)}`,
+      opts: { headers: CHOCO_HEADERS },
+      parse: "odata",
+    },
+    {
+      name: "find-by-id",
+      label: "FindPackagesById 查询全部版本",
+      url: `${CHOCO_HOST}/api/v2/FindPackagesById()?id='${encodeURIComponent(packageId)}'`,
+      opts: { headers: CHOCO_HEADERS },
+      parse: "odata-all",
+    },
+  ];
+}
+
+/** 从 Atom XML 取第一个版本号 */
+function firstVersionFromAtom(xml) {
+  return (xml.match(/<d:Version[^>]*>([^<]*)<\/d:Version>/) || [])[1] || "";
+}
 
 /**
- * Chocolatey 最新版本。
- * 主路径:GET /api/v2/package/{id} 只读 302 的 Location(约 165 字节)
- *         形如 https://packages.chocolatey.org/vlc.3.0.24.nupkg
- * 兜底:  OData 查询 Packages()($filter=IsLatestVersion)
- * 说明:packages.chocolatey.org 的 /api/ 路径对任何 UA 都返回 403,
- *       但 nupkg 下载正常,因此只在 Location 里取版本、不去访问该域名。
+ * Chocolatey 最新版本:按候选端点依次尝试,任一成功即返回。
+ * 部分网络环境下某些端点会被 WAF 拦,逐个降级可提高成功率。
  */
 async function fetchChocolateyLatest(packageId) {
-  const redirectUrl = `${CHOCO_HOST}/api/v2/package/${encodeURIComponent(packageId)}`;
-  let res;
-  try {
-    // redirect: "manual" —— 不跟随到 packages.chocolatey.org,只取 Location
-    res = await fetchWithRetry(redirectUrl, { headers: CHOCO_HEADERS, redirect: "manual" });
-  } catch (e) {
-    res = null;
-  }
+  const attempts = [];
+  for (const ep of chocoEndpointList(packageId)) {
+    let res;
+    try {
+      res = await fetchWithRetry(ep.url, ep.opts);
+    } catch (e) {
+      attempts.push(`${ep.name}:${(e && e.message) || "请求失败"}`);
+      continue;
+    }
 
-  if (res) {
-    if (res.status === 403) throw new ApiError(CHOCO_BLOCKED_MSG, 403);
-    if (res.status === 404) throw new ApiError("Chocolatey 源中未找到该包,请检查包 ID", 404);
-    if (res.status >= 300 && res.status < 400) {
+    if (res.status === 404) {
+      attempts.push(`${ep.name}:404`);
+      continue;
+    }
+    if (res.status === 403) {
+      attempts.push(`${ep.name}:403`);
+      continue;
+    }
+    if (res.status === 429) {
+      attempts.push(`${ep.name}:429`);
+      continue;
+    }
+
+    // 302 端点:从 Location 的文件名取版本
+    if (ep.parse === "redirect" && res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location") || "";
       const file = decodeURIComponent((loc.split("/").pop() || "").split("?")[0]);
       const idLower = packageId.toLowerCase();
@@ -660,28 +702,54 @@ async function fetchChocolateyLatest(packageId) {
           };
         }
       }
+      attempts.push(`${ep.name}:无法解析 Location`);
+      continue;
     }
+
+    if (!res.ok) {
+      attempts.push(`${ep.name}:${res.status}`);
+      continue;
+    }
+
+    const xml = await res.text();
+    if (ep.parse === "odata") {
+      const v = firstVersionFromAtom(xml);
+      if (v) {
+        const published = (xml.match(/<updated[^>]*>([^<]*)<\/updated>/) || [])[1] || null;
+        return {
+          version: v.trim(),
+          releaseUrl: `${CHOCO_HOST}/packages/${encodeURIComponent(packageId)}`,
+          publishedAt: published,
+        };
+      }
+      attempts.push(`${ep.name}:未找到版本`);
+      continue;
+    }
+
+    // odata-all:返回所有版本,取最大
+    const versions = [...xml.matchAll(/<d:Version[^>]*>([^<]*)<\/d:Version>/g)]
+      .map((m) => m[1].trim())
+      .filter(Boolean);
+    if (versions.length) {
+      versions.sort(compareVersions);
+      const published = (xml.match(/<updated[^>]*>([^<]*)<\/updated>/) || [])[1] || null;
+      return {
+        version: versions[versions.length - 1],
+        releaseUrl: `${CHOCO_HOST}/packages/${encodeURIComponent(packageId)}`,
+        publishedAt: published,
+      };
+    }
+    attempts.push(`${ep.name}:未找到版本`);
   }
 
-  // 兜底:OData(部分代理/环境可能不返回 Location)
-  const filter = `(Id eq '${packageId}') and IsLatestVersion`;
-  const odata = await fetchWithRetry(
-    `${CHOCO_HOST}/api/v2/Packages()?$filter=${encodeURIComponent(filter)}`,
-    { headers: CHOCO_HEADERS }
+  if (attempts.every((a) => a.includes(":403"))) throw new ApiError(CHOCO_BLOCKED_MSG, 403);
+  if (attempts.some((a) => a.endsWith(":404"))) {
+    throw new ApiError("Chocolatey 源中未找到该包,请检查包 ID", 404);
+  }
+  throw new ApiError(
+    `Chocolatey 查询失败(所有端点均不可用):${attempts.join(";")}`,
+    502
   );
-  if (odata.status === 403) throw new ApiError(CHOCO_BLOCKED_MSG, 403);
-  if (odata.status === 429) throw new ApiError("Chocolatey API 请求过于频繁,请稍后重试", 429);
-  if (!odata.ok) throw new ApiError(`Chocolatey API 请求失败(HTTP ${odata.status})`, 502);
-
-  const xml = await odata.text();
-  const version = (xml.match(/<d:Version[^>]*>([^<]*)<\/d:Version>/) || [])[1];
-  if (!version) throw new ApiError("Chocolatey 源中未找到该包,请检查包 ID", 404);
-  const published = (xml.match(/<updated[^>]*>([^<]*)<\/updated>/) || [])[1] || null;
-  return {
-    version: version.trim(),
-    releaseUrl: `${CHOCO_HOST}/packages/${encodeURIComponent(packageId)}`,
-    publishedAt: published,
-  };
 }
 
 /**
@@ -964,7 +1032,7 @@ async function runUpdateCheck(env) {
 }
 
 /** 根据配置与额度生成可读的诊断建议 */
-function buildDiagHints(config, github) {
+function buildDiagHints(config, github, choco) {
   const hints = [];
   if (!config.kv) hints.push({ level: "error", text: "APP_KV 未绑定,应用数据无法保存" });
   if (!config.adminPassword) hints.push({ level: "error", text: "ADMIN_PASSWORD 未配置,编辑接口会全部拒绝" });
@@ -993,6 +1061,24 @@ function buildDiagHints(config, github) {
   }
   const notifyCount = Object.values(config.notify).filter(Boolean).length;
   if (!notifyCount) hints.push({ level: "info", text: "未配置任何通知渠道,发现新版本时只在页面展示,不会推送" });
+
+  // Chocolatey 连通性
+  if (choco) {
+    if (choco.ok) {
+      hints.push({
+        level: "ok",
+        text: `Chocolatey 渠道可用(可用端点:${choco.workingEndpoint})`,
+      });
+    } else {
+      const detail = (choco.attempts || [])
+        .map((a) => `${a.endpoint}=${a.error ? "错误" : a.status}`)
+        .join(" / ");
+      hints.push({
+        level: "warn",
+        text: `Chocolatey 渠道当前不可用(${detail}):Chocolatey 与 Cloudflare Workers 同在 Cloudflare 网络上,Worker 出口 IP 被其 WAF 拦截时通常无解。建议改用 winget 渠道`,
+      });
+    }
+  }
 
   return hints;
 }
@@ -1207,12 +1293,35 @@ async function handleApi(request, env, pathname) {
     // 数据量概览,便于确认 KV 读写正常
     const [list, groups] = await Promise.all([readApps(env), readGroups(env)]);
 
+    // Chocolatey 连通性实测:按候选端点逐个探测(用已知存在的包 vlc)
+    const choco = { ok: false, workingEndpoint: null, attempts: [] };
+    for (const ep of chocoEndpointList("vlc")) {
+      try {
+        const res = await fetch(ep.url, ep.opts);
+        const status = res.status;
+        let usable = false;
+        if (ep.parse === "redirect") usable = status >= 300 && status < 400 && Boolean(res.headers.get("location"));
+        else usable = res.ok;
+        choco.attempts.push({ endpoint: ep.name, label: ep.label, status, usable });
+        if (usable && !choco.workingEndpoint) {
+          choco.ok = true;
+          choco.workingEndpoint = ep.name;
+        }
+      } catch (e) {
+        choco.attempts.push({
+          endpoint: ep.name, label: ep.label, status: null,
+          usable: false, error: (e && e.message) || "请求失败",
+        });
+      }
+    }
+
     return json({
       checkedAt: nowIso(),
       config,
       github,
+      choco,
       data: { apps: list.length, groups: groups.length },
-      hints: buildDiagHints(config, github),
+      hints: buildDiagHints(config, github, choco),
     });
   }
 

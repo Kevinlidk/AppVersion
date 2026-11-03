@@ -2135,6 +2135,14 @@ function renderDiagnostics(d) {
     diagRow("通知渠道", notifyNames.length ? notifyNames.join(" / ") : "未配置", notifyNames.length ? true : undefined),
     diagRow("应用 / 分组", `${d.data.apps} / ${d.data.groups}`, true),
   ];
+  // Chocolatey 实测结果
+  if (d.choco) {
+    const ck = d.choco;
+    const detail = ck.ok
+      ? `可用 · ${ck.workingEndpoint}`
+      : "不可用 · " + (ck.attempts || []).map((a) => `${a.endpoint}=${a.error ? "错误" : a.status}`).join(" / ");
+    rows.push(diagRow("Chocolatey 渠道", detail, ck.ok));
+  }
   if (g.ok && g.resetAt) {
     const t = new Date(g.resetAt);
     rows.push(diagRow("额度重置", t.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })));
