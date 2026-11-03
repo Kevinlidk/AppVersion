@@ -760,7 +760,8 @@ function githubThrottleError(res, env) {
 async function fetchGitHubLatest(repo, env) {
   const headers = await ghHeaders(env);
   const pick = (r) => ({
-    version: String(r.tag_name || "").trim(),
+    // 去掉 GitHub tag 常见的 v 前缀(v1.2.3 → 1.2.3),与手动填写的纯版本号保持一致
+    version: String(r.tag_name || "").trim().replace(/^[vV](?=[\d.])/, ""),
     releaseUrl: r.html_url || null,
     publishedAt: r.published_at || null,
     // 附带按分数排序的安装包候选,刷新时同步更新下载菜单

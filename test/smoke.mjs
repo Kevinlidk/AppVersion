@@ -319,10 +319,10 @@ await test("POST refresh:GitHub 查询最新版本并更新记录", async () => 
   const res = await call("/api/apps/" + target.id + "/refresh", { method: "POST" });
   assertEq(res.status, 200, "状态码");
   const app = await bodyOf(res);
-  assertEq(app.latestVersion, "v2.0.0", "最新版本");
+  assertEq(app.latestVersion, "2.0.0", "最新版本(tag v 前缀被剥离)");
   if (!app.lastCheckedAt) throw new Error("缺少 lastCheckedAt");
   if (app.releaseUrl !== ghBody.html_url) throw new Error("缺少 releaseUrl");
-  assertEq(app.notifiedVersion, "v2.0.0", "手动刷新后记录 notifiedVersion");
+  assertEq(app.notifiedVersion, "2.0.0", "手动刷新后记录 notifiedVersion");
 });
 
 await test("iconUrl:支持 Iconify 简写 prefix:name,自动转为图标 URL", async () => {
@@ -383,7 +383,7 @@ await test("POST refresh:GitHub 无 latest Release 时回退到最近一条", as
   const target = list.find((a) => a.channel === "github");
   const res = await call("/api/apps/" + target.id + "/refresh", { method: "POST" });
   assertEq(res.status, 200, "状态码");
-  assertEq((await bodyOf(res)).latestVersion, "v2.0.0", "回退版本");
+  assertEq((await bodyOf(res)).latestVersion, "2.0.0", "回退版本(tag v 前缀被剥离)");
   ghMode = "ok";
 });
 
@@ -1185,11 +1185,11 @@ await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,noti
   const payload = JSON.parse(hookCalls[0].body);
   assertEq(payload.apps.length, 1, "推送应用数");
   assertEq(payload.apps[0].name, "应用A", "推送对象");
-  assertEq(payload.apps[0].latestVersion, "v2.0.0", "推送版本");
+  assertEq(payload.apps[0].latestVersion, "2.0.0", "推送版本(tag v 前缀被剥离)");
 
   const list = await bodyOf(await call2("/api/apps"));
   const a2 = list.find((x) => x.id === a.id);
-  assertEq(a2.notifiedVersion, "v2.0.0", "A 记录 notifiedVersion");
+  assertEq(a2.notifiedVersion, "2.0.0", "A 记录 notifiedVersion");
   const c2 = list.find((x) => x.name === "应用C");
   if (!c2.lastCheckedAt) throw new Error("C 未更新检查时间");
   const b2 = list.find((x) => x.name === "应用B");
@@ -1229,7 +1229,7 @@ await test("scheduled:全部渠道发送失败时回滚标记,下次重试", asy
     await runScheduled(env3);
     assertEq(hookCalls.length, 1, "重试后推送");
     const list2 = await bodyOf(await call3("/api/apps"));
-    assertEq(list2[0].notifiedVersion, "v2.0.0", "重试成功记录 notifiedVersion");
+    assertEq(list2[0].notifiedVersion, "2.0.0", "重试成功记录 notifiedVersion");
   } finally {
     globalThis.fetch = realMock;
   }

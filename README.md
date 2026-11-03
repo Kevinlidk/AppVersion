@@ -8,7 +8,7 @@
 
 - ✅ **应用管理** —— 添加 / 编辑 / 删除关注的应用(名称、版本来源、当前版本、备注)
 - ✅ **多渠道版本查询** ——
-  - **GitHub Releases**:自动拉取最新正式版,无 latest 时回退最近一条 Release
+  - **GitHub Releases**:自动拉取最新正式版,无 latest 时回退最近一条 Release;tag 常见的 `v` 前缀会被自动剥离(`v1.2.3` 存为 `1.2.3`),与手动填写的纯版本号保持一致
   - **Chocolatey 社区源**:优先读 `/api/v2/package/{id}` 的 302 重定向(约 165 字节,从 nupkg 文件名取版本),失败时回退 OData 查询
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
   - **官方自查(自定义 API)**:填入厂商公开的版本 API 地址 + 版本字段路径,直接读取最新版本号。适用于 Chrome、.NET 这类提供结构化版本数据但没有标准 Release 接口的应用
