@@ -13,6 +13,16 @@
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
   - **官方自查(自定义 API)**:填入厂商公开的版本 API 地址 + 版本字段路径,直接读取最新版本号。适用于 Chrome、.NET 这类提供结构化版本数据但没有标准 Release 接口的应用
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
+  - **⇄ Chocolatey → winget 一键转换**:Chocolatey 应用卡片上提供转换按钮。若 Chocolatey 被 Cloudflare WAF 拦截(见下方说明),可一键改用它对应的 winget 包
+    - 自动在 `microsoft/winget-pkgs` 中搜索候选(应用名 / 包 ID 代码搜索 + 由官网域名推导的启发式 ID)
+    - 候选会**逐个校验是否真实存在于清单仓库**,只列出可用的包并显示其最新版本
+    - 选中后立即切换渠道并拉取版本;旧渠道的查询缓存与推送标记会自动清空
+    - 需要 `GITHUB_TOKEN` 具备只读 Contents 权限(代码搜索接口要求)
+
+> ⚠️ **关于 Chocolatey 渠道的重要说明**
+> `community.chocolatey.org` 本身托管在 **Cloudflare** 上(解析到 104.18.x.x)。Cloudflare Workers 的出口 IP 访问它时,容易被其 WAF 判定为异常并返回 **403** —— 这是**同网络内互相识别**导致,Worker 无法绕过(更换域名、换端点、改 UA 都无效)。
+> 已在代码层做到:按「302 重定向 → OData → FindPackagesById」三个端点依次降级尝试(某些环境能命中其一);若全部失败,会在错误提示与诊断面板中明确指出,并建议改用 winget 渠道。
+> **推荐做法**:新应用优先用 winget 渠道(数据源同为官方清单,且走 GitHub API,不受此限制);已有的 Chocolatey 应用可用「⇄ 转 winget」一键迁移。
 - ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
 - ✅ **更新提醒** —— 最新版本号以绿色显示;与当前版本不一致时卡片高亮「有新版本」,支持一键「已更新」标记
 - 🗂 **分组与自由排列** —— 参考 Uptime Kuma 的编辑逻辑(点「✎ 编辑布局」进入编辑模式):
@@ -242,8 +252,6 @@ npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
 > - GitHub Actions 的定时任务用的是仓库内置 `GITHUB_TOKEN`(由 workflow 自动提供),**与此处无关、无需额外配置**。
 > - 令牌会过期:到期后刷新会重新出现"GitHub API 速率受限",届时重新生成并更新 Secret 即可。
 
-> 💡 **Chocolatey 403 说明**:Chocolatey 的 WAF 会拦截部分云服务商出口 IP。本项目已改为读取 302 重定向里的版本号(极轻量)并补齐常规请求头;若仍被拦截,错误信息会提示改用 winget 渠道。
->
 > 推送语义:仅对**勾选了"发现新版本时推送通知"**的应用做定时检查与推送(新建应用默认不勾选);手动刷新过的版本视为已知悉,不会重复推送;全部渠道发送失败时保留标记,下个周期自动重试。
 
 ## 官方自查渠道(自定义版本 API)
@@ -300,6 +308,7 @@ npm test         # API + 定时推送冒烟测试(离线,60 项)
 | GET | `/api/apps/export` | 管理员 | 导出全部应用 + 分组为 JSON 配置文件(附件下载) |
 | POST | `/api/apps/import` | 管理员 | 导入配置文件,覆盖当前列表与分组(单次 ≤500 条应用 / ≤200 个分组;v1 备份不清空分组) |
 | POST | `/api/apps/detect-links` | 管理员 | 按渠道自动推导官网与下载地址,返回 `{appUrl,downloadUrl,downloads,source}` |
+| POST | `/api/apps/:id/convert-to-winget` | 管理员 | Chocolatey → winget 转换:不带 `packageId` 返回候选列表,带上则校验并切换渠道 |
 | GET | `/api/diagnostics` | 管理员 | 配置诊断:各项密钥/绑定状态 + GitHub 实时额度 + 分级建议 |
 | GET | `/api/groups` | 公开 | 获取分组列表 |
 | POST | `/api/groups` | 管理员 | 新建分组 |

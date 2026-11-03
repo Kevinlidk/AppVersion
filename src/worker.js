@@ -69,10 +69,20 @@ function fail(message, status = 400) {
   return json({ error: message }, status);
 }
 
-async function readJson(request) {
+/**
+ * 读取 JSON 请求体。
+ * @param {boolean} allowEmpty 为 true 时,空请求体返回 null 而不是报错
+ */
+async function readJson(request, allowEmpty = false) {
   try {
-    return await request.json();
-  } catch {
+    const text = await request.text();
+    if (!text.trim()) {
+      if (allowEmpty) return null;
+      throw new Error("empty");
+    }
+    return JSON.parse(text);
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError("请求体不是合法 JSON");
   }
 }
@@ -536,6 +546,152 @@ function normalizeImportedApp(rec) {
   const app = normalizeApp(rec, base);
   app.id = typeof rec.id === "string" && /^[A-Za-z0-9-]+$/.test(rec.id) ? rec.id : crypto.randomUUID();
   return app;
+}
+
+/* ─────────────── Chocolatey → winget 转换 ─────────────── */
+
+/** 从 manifest 文件路径解析包 ID,如 manifests/g/Google/Chrome/…/Google.Chrome.locale.en-US.yaml → Google.Chrome */
+function idFromManifestPath(p) {
+  if (!p || !p.startsWith("manifests/")) return "";
+  let base = (p.split("/").pop() || "").replace(/\.(yaml|yml)$/i, "");
+  const locIdx = base.indexOf(".locale.");
+  if (locIdx > 0) base = base.slice(0, locIdx);
+  base = base.replace(/\.installer$/i, "");
+  return /^[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+$/.test(base) ? base : "";
+}
+
+/** 名称归一化用于相似度比较:小写、去空格与非字母数字 */
+function nameKey(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * 在 microsoft/winget-pkgs 中按名称搜索候选包 ID。
+ * 用 GitHub 代码搜索(需 GITHUB_TOKEN,认证后 10 次/分钟)。
+ */
+async function searchWingetByText(text, env) {
+  if (!text) return [];
+  const headers = await ghHeaders(env);
+  const q = `repo:microsoft/winget-pkgs path:manifests "${text.replace(/"/g, "")}"`;
+  const url = `https://api.github.com/search/code?q=${encodeURIComponent(q)}&per_page=30`;
+  const res = await fetchWithRetry(url, { headers });
+  if (res.status === 401 || res.status === 403) {
+    const body = await res.text();
+    // 代码搜索需要 token 且令牌需有 Contents 读取权限
+    if (/rate limit/i.test(body)) throw new ApiError("GitHub 代码搜索已被限流,请稍后再试", 429);
+    throw new ApiError("GitHub 代码搜索不可用:请确认 GITHUB_TOKEN 具备只读 Contents 权限", 403);
+  }
+  if (!res.ok) throw new ApiError(`GitHub 代码搜索失败(HTTP ${res.status})`, 502);
+  const data = await res.json();
+  const ids = new Set();
+  for (const item of Array.isArray(data.items) ? data.items : []) {
+    const id = idFromManifestPath(item.path);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * 由应用信息推导可能的 winget 包 ID(启发式),并用清单目录存在性校验。
+ * 来源:appUrl 域名取发布者 + 应用名取包名,如 videolan.org + VLC → VideoLAN.VLC
+ */
+function wingetIdGuesses(app) {
+  const guesses = [];
+  const nameCandidates = [];
+  if (app.name) nameCandidates.push(app.name.replace(/\s+/g, ""));
+  if (app.packageId) nameCandidates.push(app.packageId.replace(/\s+/g, ""));
+  const publishers = [];
+  if (app.appUrl) {
+    try {
+      const host = new URL(app.appUrl).hostname.replace(/^www\./i, "");
+      const label = host.split(".")[0] || "";
+      if (label) {
+        publishers.push(label);
+        // videolan → VideoLAN 这类大小写还原由目录校验兜住,这里同时给出原样
+      }
+    } catch { /* appUrl 非法则忽略 */ }
+  }
+  if (app.packageId) publishers.push(app.packageId);
+  for (const pub of publishers) {
+    for (const nm of nameCandidates) {
+      if (pub && nm) guesses.push(`${pub}.${nm}`);
+    }
+  }
+  return [...new Set(guesses)];
+}
+
+/** 校验 winget 包 ID 是否存在(顺带返回最新版本) */
+async function verifyWingetId(packageId, env) {
+  try {
+    const latest = await fetchWingetLatest(packageId, env);
+    return { id: packageId, version: latest.version, ok: true };
+  } catch {
+    return { id: packageId, version: null, ok: false };
+  }
+}
+
+/**
+ * 为一个 Chocolatey 应用搜索 winget 候选。
+ * 顺序:代码搜索(应用名 / 包 ID)→ 启发式 ID 校验;结果按相似度排序。
+ */
+async function findWingetCandidates(app, env) {
+  const found = new Map(); // id → {id, version, source}
+  const errors = [];
+
+  const queries = [...new Set([app.name, app.packageId].filter(Boolean))];
+  for (const q of queries) {
+    try {
+      const ids = await searchWingetByText(q, env);
+      for (const id of ids.slice(0, 20)) {
+        if (!found.has(id)) found.set(id, { id, version: null, source: "search" });
+      }
+    } catch (e) {
+      errors.push((e && e.message) || "搜索失败");
+    }
+  }
+
+  // 启发式猜测:直接校验目录是否存在(比搜索便宜,且能命中代码搜索漏掉的)
+  for (const guess of wingetIdGuesses(app).slice(0, 6)) {
+    if (!found.has(guess)) {
+      const v = await verifyWingetId(guess, env);
+      if (v.ok) found.set(guess, { id: guess, version: v.version, source: "guess", verified: true });
+    }
+  }
+
+  // 排序:已验证存在 > 名称相似度 > 包名与 Chocolatey ID 一致
+  // (未验证的候选排在后面,避免误选不存在的猜测 ID)
+  const targetKey = nameKey(app.name);
+  const pkgKey = nameKey(app.packageId);
+  const list = [...found.values()].map((c) => {
+    const idParts = c.id.split(".");
+    const pkgPart = idParts[idParts.length - 1] || "";
+    const k = nameKey(pkgPart);
+    let score = 0;
+    if (c.verified) score += 1000; // 已确认存在于 winget 清单,优先级最高
+    if (k && k === targetKey) score += 100;
+    else if (k && targetKey && (k.includes(targetKey) || targetKey.includes(k))) score += 60;
+    if (pkgKey && k === pkgKey) score += 40;
+    if (c.version) score += 10;
+    return { ...c, score };
+  });
+  list.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+
+  // 逐个补版本(只补前 6 个,避免过多请求)
+  for (const c of list.slice(0, 6)) {
+    if (!c.version) {
+      const v = await verifyWingetId(c.id, env);
+      c.version = v.version;
+      c.verified = v.ok;
+      if (v.ok) c.score += 1000;
+    }
+  }
+  list.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+
+  // 优先只返回已验证存在的候选;若一个都没有,才把未验证的作为参考列出
+  const verifiedOnly = list.filter((c) => c.version);
+  const result = verifiedOnly.length ? verifiedOnly : list;
+
+  return { candidates: result.slice(0, 12), errors };
 }
 
 /* ─────────────── 渠道查询 ─────────────── */
@@ -1232,6 +1388,57 @@ async function handleApi(request, env, pathname) {
     list.splice(idx, 1);
     await writeApps(env, list);
     return json({ ok: true });
+  }
+
+  /* ── Chocolatey → winget 一键转换(需管理员)──
+     不带 packageId 时只做搜索返回候选;带 packageId 时校验并写入应用 */
+  m = pathname.match(/^\/api\/apps\/([A-Za-z0-9-]+)\/convert-to-winget$/);
+  if (m && method === "POST") {
+    await requireAdmin(env, request);
+    const list = await readApps(env);
+    const app = list.find((a) => a.id === m[1]);
+    if (!app) throw new ApiError("应用不存在", 404);
+    if (app.channel !== "chocolatey") {
+      throw new ApiError("只有 Chocolatey 渠道的应用支持该转换", 400);
+    }
+
+    const body = await readJson(request, true);
+    const picked = body && typeof body.packageId === "string" ? body.packageId.trim() : "";
+
+    // 第一步:未指定目标时,搜索候选供用户选择
+    if (!picked) {
+      const { candidates, errors } = await findWingetCandidates(app, env);
+      return json({
+        app: { id: app.id, name: app.name, packageId: app.packageId },
+        candidates,
+        errors,
+      });
+    }
+
+    // 第二步:校验选定的 ID 并转换
+    if (!WINGET_ID_RE.test(picked)) {
+      throw new ApiError("winget 包 ID 格式不正确,应形如 VideoLAN.VLC", 400);
+    }
+    const verified = await verifyWingetId(picked, env);
+    if (!verified.ok) throw new ApiError(`winget 源中找不到包「${picked}」`, 404);
+
+    app.channel = "winget";
+    app.packageId = picked;
+    delete app.repo;
+    // 换了数据源,旧的查询结果与推送标记全部作废
+    delete app.latestVersion;
+    delete app.releaseUrl;
+    delete app.publishedAt;
+    delete app.lastCheckedAt;
+    delete app.notifiedVersion;
+    // 用新渠道立刻取一次版本
+    try {
+      const latest = await fetchLatest(app, env);
+      applyLatest(app, latest);
+      app.notifiedVersion = latest.version;
+    } catch { /* 查询失败不影响转换本身,用户可稍后手动刷新 */ }
+    await writeApps(env, list);
+    return json({ ok: true, app });
   }
 
   m = pathname.match(/^\/api\/apps\/([A-Za-z0-9-]+)\/refresh$/);

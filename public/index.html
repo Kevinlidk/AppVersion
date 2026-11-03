@@ -331,6 +331,25 @@
   .diag-hint.info { background: var(--accent-weak); color: var(--accent); }
   .diag-hint .ico { flex-shrink: 0; font-weight: 700; }
 
+  /* ── winget 转换候选列表 ── */
+  .winget-list {
+    display: grid; gap: 6px; margin-top: 12px;
+    max-height: 300px; overflow-y: auto;
+  }
+  .winget-opt {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 11px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--input-bg);
+    cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .winget-opt:hover { border-color: var(--accent); }
+  .winget-opt.selected { border-color: var(--accent); background: var(--accent-weak); }
+  .winget-opt input { flex-shrink: 0; accent-color: var(--accent); width: 16px; height: 16px; }
+  .winget-opt-main { flex: 1; min-width: 0; }
+  .winget-opt-id { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+  .winget-opt-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .winget-empty { font-size: 13px; color: var(--muted); padding: 10px 0; text-align: center; }
+
   /* ── 应用卡片 ── */
   /* 列表容器装的是「分组」,单个分组占满一行;卡片网格在 .group-body 里 */
   .list { display: block; margin-top: 12px; }
@@ -691,6 +710,16 @@
       <button type="submit" class="btn primary" id="importSubmitBtn">导入</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="wingetDialog">
+  <h2>转换为 winget 渠道</h2>
+  <p class="hint" id="wingetHint">正在搜索对应的 winget 包…</p>
+  <div id="wingetCandidates" class="winget-list"></div>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="wingetCancelBtn">取消</button>
+    <button type="button" class="btn primary" id="wingetConfirmBtn" disabled>转换</button>
+  </div>
 </dialog>
 
 <dialog id="groupDialog">
@@ -1097,6 +1126,7 @@ function cardHtml(a) {
   const actions = isAdmin ? `
       <div class="card-actions">
         ${!manual ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
+        ${a.channel === "chocolatey" ? '<button class="btn act-to-winget" title="Chocolatey 不可达时,可改用 winget 渠道">⇄ 转 winget</button>' : ""}
         ${st === "update" ? '<button class="btn act-marked">已更新</button>' : ""}
         <button class="btn act-edit">编辑</button>
         <button class="btn danger-text act-del">删除</button>
@@ -2177,6 +2207,90 @@ $("#diagBtn").addEventListener("click", async () => {
   }
 });
 
+/* ── Chocolatey → winget 一键转换 ── */
+
+const wingetDlg = $("#wingetDialog");
+let wingetTargetId = null;
+
+function renderWingetCandidates(data, appName) {
+  const box = $("#wingetCandidates");
+  const list = Array.isArray(data.candidates) ? data.candidates : [];
+  if (!list.length) {
+    const why = (data.errors || []).length
+      ? esc(data.errors.join(";"))
+      : "没有找到匹配的 winget 包";
+    box.innerHTML = `<p class="winget-empty">${why}<br>可关闭此窗口后直接在编辑里手动填写 winget 包 ID</p>`;
+    $("#wingetConfirmBtn").disabled = true;
+    $("#wingetHint").textContent = "未找到候选";
+    return;
+  }
+  box.innerHTML = list.map((c, i) => `
+    <label class="winget-opt${i === 0 ? " selected" : ""}">
+      <input type="radio" name="wingetPick" value="${esc(c.id)}"${i === 0 ? " checked" : ""}>
+      <span class="winget-opt-main">
+        <span class="winget-opt-id">${esc(c.id)}</span>
+        <span class="winget-opt-sub">${c.version ? "最新 " + esc(c.version) : "版本未知"}${c.verified ? " · 已确认存在" : ""}</span>
+      </span>
+    </label>`).join("");
+  $("#wingetConfirmBtn").disabled = false;
+  $("#wingetHint").textContent = `为「${appName}」找到 ${list.length} 个候选,请选择要使用的 winget 包:`;
+  box.querySelectorAll('input[name="wingetPick"]').forEach((r) => {
+    r.addEventListener("change", () => {
+      box.querySelectorAll(".winget-opt").forEach((l) => l.classList.remove("selected"));
+      r.closest(".winget-opt").classList.add("selected");
+    });
+  });
+}
+
+async function convertToWinget(appId, btn) {
+  wingetTargetId = appId;
+  const app = apps.find((a) => a.id === appId);
+  $("#wingetCandidates").innerHTML = "";
+  $("#wingetHint").textContent = "正在搜索对应的 winget 包…";
+  $("#wingetConfirmBtn").disabled = true;
+  wingetDlg.showModal();
+  if (btn) { btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = "搜索中…"; }
+  try {
+    const data = await api(`/api/apps/${appId}/convert-to-winget`, { method: "POST" });
+    renderWingetCandidates(data, app ? app.name : "");
+  } catch (e) {
+    $("#wingetCandidates").innerHTML = `<p class="winget-empty">${esc(e.message)}</p>`;
+    $("#wingetHint").textContent = "搜索失败";
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig; }
+  }
+}
+
+$("#wingetCancelBtn").addEventListener("click", () => wingetDlg.close());
+bindBackdropClose(wingetDlg);
+enhanceDialog(wingetDlg, "#wingetConfirmBtn");
+
+$("#wingetConfirmBtn").addEventListener("click", async () => {
+  const picked = wingetDlg.querySelector('input[name="wingetPick"]:checked');
+  if (!picked || !wingetTargetId) return;
+  const btn = $("#wingetConfirmBtn");
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "转换中…";
+  try {
+    const r = await api(`/api/apps/${wingetTargetId}/convert-to-winget`, {
+      method: "POST",
+      body: { packageId: picked.value },
+    });
+    apps = apps.map((a) => (a.id === r.app.id ? r.app : a));
+    wingetDlg.close();
+    render();
+    toast(r.app.latestVersion
+      ? `已转为 winget 渠道,最新版本 ${r.app.latestVersion}`
+      : "已转为 winget 渠道,请手动刷新获取版本");
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+});
+
 /* ── 事件绑定 ── */
 
 /* 下载菜单:点击图标切换展开(触屏友好),点菜单外或选中后收起 */
@@ -2236,6 +2350,7 @@ listEl.addEventListener("click", async (e) => {
   else if (btn.classList.contains("act-edit")) openDialog(app);
   else if (btn.classList.contains("act-del")) del(app);
   else if (btn.classList.contains("act-marked")) markUpdated(app);
+  else if (btn.classList.contains("act-to-winget")) convertToWinget(app.id, btn);
   else if (btn.classList.contains("act-up")) {
     const siblings = appsInGroup(app.groupId || null);
     const i = siblings.findIndex((a) => a.id === app.id);

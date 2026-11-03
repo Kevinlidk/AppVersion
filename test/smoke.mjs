@@ -696,6 +696,76 @@ await test("diagnostics:未配置 GITHUB_TOKEN 时给出告警", async () => {
   }
 });
 
+/* ── Chocolatey → winget 转换 ── */
+
+await test("convert-to-winget:非 chocolatey 应用返回 400,未登录 401", async () => {
+  const manual = await bodyOf(await call("/api/apps", post({ name: "手动应用", channel: "manual" })));
+  const res = await call(`/api/apps/${manual.id}/convert-to-winget`, post({}));
+  assertEq(res.status, 400, "非 choco 应用");
+  if (!/Chocolatey/.test((await bodyOf(res)).error)) throw new Error("提示文案不符");
+
+  const anon = await worker.fetch(
+    new Request("http://localhost/api/apps/x/convert-to-winget", post({})), env, ctx
+  );
+  assertEq(anon.status, 401, "未登录");
+  await call("/api/apps/" + manual.id, { method: "DELETE" });
+});
+
+await test("convert-to-winget:指定合法 ID 后切换渠道并清空旧查询缓存", async () => {
+  const choco = await bodyOf(await call("/api/apps", post({
+    name: "VLC", channel: "chocolatey", packageId: "vlc", version: "3.0.20",
+  })));
+  // 先刷新一次,产生 latestVersion / notifiedVersion
+  await call(`/api/apps/${choco.id}/refresh`, { method: "POST" });
+  const before = (await bodyOf(await call("/api/apps"))).find((a) => a.id === choco.id);
+  assertEq(before.latestVersion, "9.9.9", "刷新后有版本");
+
+  const res = await call(`/api/apps/${choco.id}/convert-to-winget`, post({ packageId: "VideoLAN.VLC" }));
+  assertEq(res.status, 200, "状态码");
+  const r = await bodyOf(res);
+  assertEq(r.ok, true, "ok");
+  assertEq(r.app.channel, "winget", "渠道已切换");
+  assertEq(r.app.packageId, "VideoLAN.VLC", "包 ID");
+  assertEq(r.app.repo, undefined, "repo 已移除");
+  // 转换后会立即用新渠道查询(dev mock 的 winget 返回 9.10.0)
+  assertEq(r.app.latestVersion, "9.10.0", "新渠道版本");
+  await call("/api/apps/" + choco.id, { method: "DELETE" });
+});
+
+await test("convert-to-winget:非法格式 400,不存在的包 404", async () => {
+  const choco = await bodyOf(await call("/api/apps", post({
+    name: "X", channel: "chocolatey", packageId: "x",
+  })));
+  assertEq(
+    (await call(`/api/apps/${choco.id}/convert-to-winget`, post({ packageId: "nodot" }))).status,
+    400, "无发布者前缀"
+  );
+  wingetMode = "notfound";
+  assertEq(
+    (await call(`/api/apps/${choco.id}/convert-to-winget`, post({ packageId: "No.Such" }))).status,
+    404, "包不存在"
+  );
+  wingetMode = "ok";
+  await call("/api/apps/" + choco.id, { method: "DELETE" });
+});
+
+await test("convert-to-winget:不传 packageId 时返回候选列表", async () => {
+  const choco = await bodyOf(await call("/api/apps", post({
+    name: "VLC", channel: "chocolatey", packageId: "vlc",
+    appUrl: "https://www.videolan.org/vlc/",
+  })));
+  const res = await call(`/api/apps/${choco.id}/convert-to-winget`, post({}));
+  assertEq(res.status, 200, "状态码");
+  const d = await bodyOf(res);
+  if (!Array.isArray(d.candidates)) throw new Error("缺少 candidates 数组");
+  assertEq(d.app.name, "VLC", "返回应用信息");
+  // 启发式会尝试 videolan.VLC 之类;dev mock 让所有 winget ID 都存在,故应至少有一个候选
+  if (d.candidates.length === 0 && (d.errors || []).length === 0) {
+    throw new Error("既无候选也无错误信息");
+  }
+  await call("/api/apps/" + choco.id, { method: "DELETE" });
+});
+
 /* ── 分组与布局 ── */
 
 await test("分组:创建/重命名/删除,删除后组内应用回到未分组", async () => {
