@@ -339,13 +339,19 @@ function normalizeDownloadList(raw) {
     if (u.protocol !== "https:") continue;
     seen.add(u.href);
     const score = Number(item.score);
-    list.push({
+    const entry = {
       name: String(item.name ?? "").slice(0, 200) || decodeURIComponent(u.pathname.split("/").pop() || ""),
       url: u.href,
       score: Number.isFinite(score) ? score : 0,
       kind: String(item.kind ?? "").slice(0, 12),
       arch: String(item.arch ?? "").slice(0, 12),
-    });
+    };
+    // winget 清单附带的校验值(可选):SHA-256 / ProductCode
+    const sha = normalizeSha256(item.sha256);
+    if (sha) entry.sha256 = sha;
+    const pc = normalizeProductCode(item.productCode);
+    if (pc) entry.productCode = pc;
+    list.push(entry);
   }
   list.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   return list;
@@ -943,6 +949,18 @@ async function fetchChocolateyLatest(packageId) {
  * (顶层键值、`InstallerType: x` 默认值、`Installers:` 列表)。
  * 不引入依赖,仅提取 Architecture / InstallerUrl / InstallerType / Scope。
  */
+/** SHA-256 规范化:64 位十六进制(转小写);不合法返回空串 */
+function normalizeSha256(v) {
+  const s = String(v ?? "").trim().toLowerCase();
+  return /^[0-9a-f]{64}$/.test(s) ? s : "";
+}
+
+/** ProductCode 规范化:GUID 或字母数字/花括号组合,限 128 字符;不合法返回空串 */
+function normalizeProductCode(v) {
+  const s = String(v ?? "").trim();
+  return s && s.length <= 128 && /^[0-9a-zA-Z{}._-]+$/.test(s) ? s : "";
+}
+
 function parseWingetInstallerYaml(text) {
   const lines = String(text || "").split(/\r?\n/);
   const top = {};          // 顶层标量(作为子项默认值)
@@ -965,7 +983,8 @@ function parseWingetInstallerYaml(text) {
     }
 
     if (!inInstallers) {
-      const m = line.match(/^([A-Za-z]+):\s*(.+)$/);
+      // 键名可含数字(如 InstallerSha256)
+      const m = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.+)$/);
       if (m && indent === 0) top[m[1]] = unquote(m[2]);
       continue;
     }
@@ -978,7 +997,7 @@ function parseWingetInstallerYaml(text) {
       continue;
     }
     if (current) {
-      const kv = line.match(/^([A-Za-z]+):\s*(.+)$/);
+      const kv = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.+)$/);
       if (kv) current[kv[1]] = unquote(kv[2]);
     }
   }
@@ -990,6 +1009,8 @@ function parseWingetInstallerYaml(text) {
       url: it.InstallerUrl,
       type: (it.InstallerType || it.NestedInstallerType || top.InstallerType || "").toLowerCase(),
       scope: (it.Scope || top.Scope || "").toLowerCase(),
+      sha256: normalizeSha256(it.InstallerSha256 ?? top.InstallerSha256),
+      productCode: normalizeProductCode(it.ProductCode ?? top.ProductCode),
     }));
 }
 
@@ -1050,6 +1071,8 @@ async function fetchWingetInstallers(packageId, version, env) {
         score: archScore(it.arch) + kindScore(kind),
         kind,
         arch: it.arch === "arm64" ? "arm" : it.arch,
+        sha256: it.sha256 || "",
+        productCode: it.productCode || "",
       };
     })
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));

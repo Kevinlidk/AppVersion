@@ -67,8 +67,11 @@ globalThis.fetch = async (input, init) => {
       "Installers:",
       "  - Architecture: x86",
       "    InstallerUrl: https://dl.example.com/vlc-win32.exe",
+      "    InstallerSha256: 1111111111111111111111111111111111111111111111111111111111111111",
       "  - Architecture: x64",
       "    InstallerUrl: https://dl.example.com/vlc-win64.exe",
+      "    InstallerSha256: 2222222222222222222222222222222222222222222222222222222222222222",
+      "    ProductCode: {A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}",
       "  - Architecture: arm64",
       "    InstallerUrl: https://dl.example.com/vlc-winarm64.exe",
       "ManifestType: installer",
@@ -769,8 +772,41 @@ await test("winget 刷新:从 installer.yaml 解析各架构下载地址", async
   assertEq(app.downloads[0].arch, "x64", "首选 x64");
   assertEq(app.downloads[0].kind, "EXE", "首选 EXE");
   if (!app.downloads.every((d) => d.url && d.name)) throw new Error("候选缺少 url/name");
+  // 校验值:x64 项同时带 InstallerSha256 + ProductCode(均解析);x86 项只有 Sha256;arm64 项两者皆无
+  assertEq(app.downloads[0].arch, "x64", "首选仍是 x64");
+  assertEq(app.downloads[0].sha256, "2222222222222222222222222222222222222222222222222222222222222222", "x64 SHA-256");
+  assertEq(app.downloads[0].productCode, "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}", "x64 ProductCode");
+  const x86 = app.downloads.find((d) => d.arch === "x86");
+  assertEq(x86.sha256, "1111111111111111111111111111111111111111111111111111111111111111", "x86 SHA-256");
+  if (x86.productCode) throw new Error("x86 不应有 ProductCode");
+  const arm = app.downloads.find((d) => d.arch === "arm");
+  if (arm.sha256 || arm.productCode) throw new Error("arm64 不应有校验值");
   // downloadUrl 应被自动写为候选首选
   assertEq(app.downloadUrl, app.downloads[0].url, "downloadUrl 同步为首选");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("downloads 校验值:仅保留合法的 sha256(64位hex转小写)与 ProductCode", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "校验值应用", channel: "manual",
+    downloadUrl: "https://e.com/a.exe",
+    downloads: [
+      {
+        name: "a.exe", url: "https://e.com/a.exe", score: 10,
+        sha256: "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+        productCode: "{D2BF-44D2-A9E3}",
+      },
+      {
+        name: "b.msi", url: "https://e.com/b.msi", score: 9,
+        sha256: "not-a-hash", productCode: "非法值 带空格",
+      },
+    ],
+  })));
+  assertEq(a.downloads.length, 2, "两个候选");
+  assertEq(a.downloads[0].sha256, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "大写 hex 转小写保留");
+  assertEq(a.downloads[0].productCode, "{D2BF-44D2-A9E3}", "合法 ProductCode 保留");
+  if (a.downloads[1].sha256) throw new Error("非法 sha256 未被剔除");
+  if (a.downloads[1].productCode) throw new Error("非法 ProductCode 未被剔除");
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 

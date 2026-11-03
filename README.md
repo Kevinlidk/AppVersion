@@ -59,6 +59,7 @@
   - 卡片右下角显示**下载图标**;有多个安装包时,**鼠标悬停(或点击)图标会展开候选列表**,按分数排序,点选即下载对应文件
     - **GitHub Releases 与 winget 两个渠道都支持**:winget 会读取清单里的 `installer.yaml`,解析出各架构的真实下载地址
     - 列表项带类型徽标(`EXE`/`MSI`/`DMG`…)与架构标签(`x64`/`arm`/`x86`),排名第一的选项高亮
+    - winget 候选项下方显示**校验值文本框**:`ProductCode` 优先(两者都有时只显示它),否则显示 `SHA-256`,右上角复制图标可一键复制完整值
     - winget 候选排序:`x64` > `arm64` > `x86`;同架构内 `EXE` > `MSI` > `MSIX` > `ZIP`
     - 自动写入的下载地址**不会覆盖你手动填写的地址**(手动填过则保持不变)
   - 表单内的「自动检测」按钮可按渠道自动推导地址(GitHub 取仓库主页 + Release 安装包资产;Chocolatey/winget 取包页面)
@@ -294,7 +295,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,60 项)
+npm test         # API + 定时推送冒烟测试(离线,69 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:
@@ -341,7 +342,7 @@ npm test         # API + 定时推送冒烟测试(离线,60 项)
   "linkName": true,
   "downloadUrl": "https://github.com/videolan/vlc/releases/download/3.0.24/vlc-3.0.24-win64.exe",
   "downloads": [
-    { "name": "vlc-3.0.24-win64.exe", "url": "https://…/vlc-3.0.24-win64.exe", "score": 100, "kind": "exe", "arch": "x64" },
+    { "name": "vlc-3.0.24-win64.exe", "url": "https://…/vlc-3.0.24-win64.exe", "score": 100, "kind": "exe", "arch": "x64", "sha256": "…", "productCode": "{…}" },
     { "name": "vlc-3.0.24-win64.msi", "url": "https://…/vlc-3.0.24-win64.msi", "score": 95, "kind": "msi", "arch": "x64" }
   ],
   "iconUrl": "",
@@ -354,7 +355,7 @@ npm test         # API + 定时推送冒烟测试(离线,60 项)
 }
 ```
 
-> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
+> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;winget 渠道的候选还会附带 `sha256` / `productCode`(来自该版本 `installer.yaml` 的 `InstallerSha256` / `ProductCode`,仅保留合法值),下载菜单中每个候选会在文件名下方显示校验值——两者同时存在时优先只显示 `ProductCode`,文本框右上角有复制按钮可一键复制完整值;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
 
 分组记录示例:
 

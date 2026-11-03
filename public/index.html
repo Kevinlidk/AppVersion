@@ -443,11 +443,11 @@
   .dl-wrap.open .dl-menu {
     opacity: 1; visibility: visible; transform: translateY(0);
   }
-  .dl-item {
+  .dl-item { padding: 0; border-radius: 8px; transition: background .12s; }
+  .dl-main {
     display: flex; align-items: center; gap: 7px;
-    padding: 7px 9px; border-radius: 8px;
+    padding: 7px 9px;
     text-decoration: none; color: var(--text); font-size: 13px;
-    transition: background .12s;
   }
   .dl-item:hover { background: var(--accent-weak); }
   .dl-item.best { background: color-mix(in srgb, var(--accent-weak) 70%, transparent); }
@@ -466,6 +466,29 @@
   .dl-name {
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* 校验值文本框:ProductCode 优先于 SHA-256,右上角浮动复制按钮 */
+  .dl-code {
+    position: relative; margin: 0 9px 7px;
+    padding: 4px 8px; border-radius: 6px;
+    background: var(--input-bg); border: 1px solid var(--border);
+    font-family: ui-monospace, Consolas, "Courier New", monospace;
+    font-size: 11px; color: var(--muted);
+  }
+  .dl-code code {
+    display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding-right: 12px;
+  }
+  .dl-copy {
+    position: absolute; top: -8px; right: -5px;
+    width: 20px; height: 20px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted); cursor: pointer;
+    transition: color .12s, border-color .12s, transform .12s;
+  }
+  .dl-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .dl-copy:active { transform: scale(.88); }
+  .dl-copy svg { width: 11px; height: 11px; }
   .badge {
     flex-shrink: 0; font-size: 12px; font-weight: 600;
     padding: 3px 9px; border-radius: 999px;
@@ -1174,6 +1197,24 @@ function kindLabel(item) {
   return k === "appimage" ? "AppImage" : k.toUpperCase();
 }
 
+/** 复制下载候选的校验值;clipboard API 不可用时(非安全上下文)降级 execCommand */
+async function copyDlValue(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("已复制到剪贴板");
+    return;
+  } catch { /* 走降级 */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { /* ignore */ }
+  ta.remove();
+  toast(ok ? "已复制到剪贴板" : "复制失败,请手动选择复制");
+}
+
 /** 卡片右下角的下载入口:有多个候选项时悬停/点击展开菜单 */
 function downloadBtnHtml(a) {
   if (!a.downloadUrl) return "";
@@ -1190,13 +1231,29 @@ function downloadBtnHtml(a) {
       `aria-label="下载 ${esc(a.name)} 最新版本">${icon}</a>`;
   }
 
+  const copySvg =
+    `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" ` +
+    `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+
+  // 校验值行:ProductCode 优先于 SHA-256(两者都有时只显示 ProductCode)
+  const codeRowHtml = (it) => {
+    const val = it.productCode || it.sha256 || "";
+    if (!val) return "";
+    const label = it.productCode ? "ProductCode" : "SHA-256";
+    return `<div class="dl-code" title="${label}:${esc(val)}"><code>${esc(val)}</code>` +
+      `<button type="button" class="dl-copy" data-copy="${esc(val)}" title="复制 ${label}" ` +
+      `aria-label="复制 ${label}">${copySvg}</button></div>`;
+  };
+
   const items = list.map((it, i) => {
     const kind = kindLabel(it);
     const arch = it.arch ? `<span class="dl-arch">${esc(it.arch)}</span>` : "";
-    return `<a class="dl-item${i === 0 ? " best" : ""}" href="${esc(it.url)}" target="_blank" ` +
-      `rel="noopener noreferrer" download title="${esc(it.url)}">` +
+    return `<div class="dl-item${i === 0 ? " best" : ""}">` +
+      `<a class="dl-main" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" download title="${esc(it.url)}">` +
       `<span class="dl-kind">${esc(kind)}</span>${arch}` +
-      `<span class="dl-name">${esc(it.name)}</span></a>`;
+      `<span class="dl-name">${esc(it.name)}</span></a>` +
+      codeRowHtml(it) + `</div>`;
   }).join("");
 
   return `<div class="dl-wrap">
@@ -2446,6 +2503,13 @@ listEl.addEventListener("click", (e) => {
     });
     wrap.classList.toggle("open", willOpen);
     trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    return;
+  }
+  // 复制校验值(ProductCode / SHA-256):不收起菜单,便于连续复制多个
+  const copyBtn = e.target.closest(".dl-copy");
+  if (copyBtn) {
+    e.preventDefault();
+    copyDlValue(copyBtn.dataset.copy || "");
     return;
   }
   // 点了某个下载项:收起菜单(让浏览器继续处理下载)
