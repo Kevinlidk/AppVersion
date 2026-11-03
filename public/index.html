@@ -1123,17 +1123,29 @@ window.appVersionIconFallback = function (img) {
   if (img.parentNode) img.parentNode.replaceChild(span, img);
 };
 
+/**
+ * 卡片 meta 行的「来源」链接:固定指向来源的【所有版本详情页】,
+ * 与右下角的下载图标(具体安装包)职责分离:
+ *   GitHub     → 仓库的 Releases 列表页
+ *   Chocolatey → 包页面(含版本历史)
+ *   winget     → winget-pkgs 中该包的版本目录页
+ *   official   → 官方 API 所在域名
+ */
 function sourceMeta(a) {
   if (a.channel === "github") {
-    if (a.repo) return { label: a.repo, url: a.releaseUrl || "https://github.com/" + a.repo };
+    if (a.repo) return { label: a.repo, url: "https://github.com/" + a.repo + "/releases" };
     return { label: "GitHub" };
   }
   if (a.channel === "chocolatey") {
-    if (a.packageId) return { label: a.packageId, url: a.releaseUrl || "https://community.chocolatey.org/packages/" + a.packageId };
+    if (a.packageId) return { label: a.packageId, url: "https://community.chocolatey.org/packages/" + a.packageId };
     return { label: "Chocolatey" };
   }
   if (a.channel === "winget") {
-    if (a.packageId) return { label: a.packageId, url: a.releaseUrl || "https://winget.run/pkg/" + a.packageId };
+    if (a.packageId) {
+      const parts = a.packageId.split(".");
+      const dir = `manifests/${a.packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
+      return { label: a.packageId, url: "https://github.com/microsoft/winget-pkgs/tree/master/" + dir };
+    }
     return { label: "winget" };
   }
   if (a.channel === "official") {

@@ -1079,7 +1079,8 @@ async function fetchWingetLatest(packageId, env) {
 
   return {
     version: latest,
-    releaseUrl: best ? best.url : `https://github.com/microsoft/winget-pkgs/tree/master/${dir}`,
+    // 指向该包在 winget-pkgs 中的版本目录页(所有版本详情)
+    releaseUrl: `https://github.com/microsoft/winget-pkgs/tree/master/${dir}`,
     publishedAt: null,
     downloads,
   };
