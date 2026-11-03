@@ -15,13 +15,17 @@
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
 - ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
 - ✅ **更新提醒** —— 最新版本号以绿色显示;与当前版本不一致时卡片高亮「有新版本」,支持一键「已更新」标记
-- 🗂 **分组与自由排列** —— 参考 Uptime Kuma 的编辑逻辑:
-  - **可新建 / 重命名 / 删除分组**;删除分组时组内应用自动移到「未分组」,不会丢失
+- 🗂 **分组与自由排列** —— 参考 Uptime Kuma 的编辑逻辑(点「✎ 编辑布局」进入编辑模式):
+  - **可新建 / 重命名 / 删除分组**(新建与重命名使用站内样式化弹窗);删除分组时组内应用自动移到「未分组」,不会丢失
   - **卡片可归入任意分组**,并可**在组内调整显示顺序**
   - **分组顺序可自由调整**
   - **分组支持折叠 / 展开**,点击组名左侧的大号箭头即可;**折叠状态保存在本地浏览器**(localStorage) —— 每个访问者各自独立,互不影响,访客也能自由折叠,无需登录
-  - 操作方式:**桌面端鼠标拖拽**(卡片可跨组拖动、拖动组标题左侧 ⠿ 调整组顺序)、**移动端用卡片上的分组下拉 + ↑/↓ 按钮**
+  - 操作方式:
+    - **桌面端鼠标拖拽** —— 卡片可跨组拖动;拖动组标题左侧 ⠿ 调整组顺序;**拖到已折叠分组的标题上**会移入该组并自动展开
+    - **手机端触屏拖拽** —— 从卡片/分组的手柄按住拖动即可,移动超过 8px 进入拖拽(不会误触发页面滚动)
+    - **辅助操作** —— 卡片上的分组下拉 + ↑/↓ 按钮;分组标题上的 ↑/↓ 按钮
   - 布局保存在 Cloudflare KV,并随导出的配置文件一起备份
+  - 未创建任何分组时不显示「未分组」标题,保持纯卡片观感
 - 🔎 **一键筛选待更新** —— 顶部统计里的「N 个有更新」是**可点击按钮**,点击后只显示需要更新的应用(再次点击或按 ✕ 取消),可与搜索、渠道筛选叠加
 - 🎁 **开箱示例** —— 首次访问自动内置「Google Chrome」示例应用(Chocolatey 渠道,可自动查询);登录后可编辑或删除,清空后不会重复注入
 - 🖼 **应用图标** —— 按优先级自动匹配:
@@ -44,16 +48,23 @@
     - 自动识别架构:`x64`/`win64`/`amd64`/`x86_64`/`64bit` 视为 64 位;`arm64`/`aarch64` 与 32 位构建降级选用
     - 签名、校验和、源码包、调试符号等非安装文件会被跳过;找不到合适资产时回退到 Release 页面链接
 - 🔐 **管理员登录** —— 右上角登录后才能添加/编辑/删除/刷新监控应用;访客默认只读,仅可查看页面信息
-- 📤 **配置导入 / 导出** —— 管理员可一键把全部关注应用导出为 JSON 配置文件备份,或导入配置文件恢复/迁移(导入覆盖当前列表,操作前有确认提示)
+- 📤 **配置导入 / 导出** —— 管理员可一键把全部关注应用与分组导出为 JSON 配置文件备份,或导入配置文件恢复/迁移(导入覆盖当前列表,操作前有确认提示)
+  - 导出格式为 v2(含 `groups`);**导入 v1 旧备份(无 `groups` 字段)不会清空现有分组**
+- 🩺 **配置检查面板** —— 编辑模式下点「配置检查」,一眼看清各项配置是否真的生效:
+  - KV 绑定、管理员密码、定时检查令牌、GitHub 令牌、各通知渠道、应用/分组数量
+  - **实时查验 GitHub 令牌**:用 `rate_limit` 返回的额度反推令牌是否被认可(认证 5000/小时 vs 匿名 60/小时),能识别「已设置但已过期/填错」这种**静默降级**情况
+  - 按结果给出分级建议(正常 / 提醒 / 错误)与额度重置时间;令牌只显示长度,不泄露明文
 - ✅ **批量刷新** —— 一键刷新全部自动渠道应用,逐一显示进度
 - ✅ **搜索筛选** —— 按名称 / 仓库 / 包 ID / 备注搜索,按渠道筛选
-- 🎨 **动态背景** —— GlyphWind WebGL2 字形流背景(`public/background/` 套件,与参考项目接线一致)
-- 🌗 **浅色 / 深色显示切换** —— 右上角图标一键切换(**默认浅色**),选择记入 localStorage;两种主题**动画参数完全一致**,仅切换画布底色、字形墨色与该层文字颜色:
-  - 浅色:`#f4f6fb` 浅底 + 中灰字形
-  - 深色:`#333` 底 + 白色薄雾层 + 浅灰字形
-  - 卡片 / 顶栏等 UI 始终为浅色,保证可读
-  - 支持 `?seed=123&look=mixed|lettered|figured` 切换图案
-- 📱 **移动端优先** —— 响应式布局(适配 360px~430px 常见手机屏宽)、大号点击区域、刘海屏安全区适配、深色模式自动跟随系统
+- 🎨 **动态背景** —— GlyphWind WebGL2 字形流背景(`public/background/` 套件),画布位于内容之下且不拦截点击
+- 🌗 **浅色 / 深色显示切换** —— 右上角图标一键切换(**默认浅色**),选择记入 localStorage,刷新后保持:
+  - **两套完整 UI 配色**(不是只换底色):卡片、顶栏、搜索框、输入框、下拉、弹窗、下载菜单、滚动条、轻提示全部随主题切换
+  - 浅色:页面底 `#f4f6fb`,卡片/顶栏 `#fff`
+  - 深色:页面底 `#333` + 白色薄雾层,卡片/顶栏 `#3d4148`,输入框 `#2f3237`,文字 `#e8eaee`,滚动条深灰
+  - 两种主题下**背景动画参数完全一致**,仅切换画布底色与字形墨色
+  - 支持 `?seed=123&look=mixed|lettered|figured` 切换背景图案
+- 📱 **移动端优先** —— 响应式布局(适配 360px~430px 常见手机屏宽)、大号点击区域、刘海屏安全区适配、窄屏自动收紧工具栏与筛选标签;**触屏可拖拽排序**
+- ♿ **可访问性** —— 弹窗打开时自动聚焦首个控件、关闭后焦点返回触发元素、Tab 键在弹窗内循环;关键操作按钮均带 `aria-label`
 
 > 💡 **关于 UniGetUI**:它本身只提供本机 IPC/CLI 接口,没有公开的 Web 版本查询 API;本项目的 Chocolatey / winget 渠道直接对接它背后聚合的官方数据源,效果等同且可在云端运行。
 
@@ -67,6 +78,7 @@
 │   └── build-config.mjs # 部署前注入 KV_NAMESPACE_ID,生成 wrangler.generated.toml
 ├── public/index.html    # 前端单页(Workers Static Assets 承载)
 ├── public/background/   # GlyphWind 动态背景套件(WebGL2,装饰性)
+├── public/favicon.svg   # 站点图标(另有 favicon.ico / apple-touch-icon.png / icon-192.png)
 ├── .github/workflows/   # check-updates.yml:定时触发 /api/check
 ├── wrangler.toml        # Cloudflare Workers 基础配置(assets / 说明)
 ├── package.json
@@ -266,8 +278,12 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线)
+npm test         # API + 定时推送冒烟测试(离线,60 项)
 ```
+
+> 本地预览也可传入真实环境变量以验证完整链路,例如:
+> `GITHUB_TOKEN=xxx FEISHU_WEBHOOK_URL=https://… npm run serve`
+> (支持 `GITHUB_TOKEN` / `FEISHU_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_URL` / `SERVERCHAN_SENDKEY`)
 
 ## API 一览
 
@@ -282,8 +298,9 @@ npm test         # API + 定时推送冒烟测试(离线)
 | DELETE | `/api/apps/:id` | 管理员 | 删除应用 |
 | POST | `/api/apps/:id/refresh` | 管理员 | 查询最新版本(GitHub / Chocolatey / winget 渠道) |
 | GET | `/api/apps/export` | 管理员 | 导出全部应用 + 分组为 JSON 配置文件(附件下载) |
-| POST | `/api/apps/import` | 管理员 | 导入配置文件,覆盖当前列表与分组(单次 ≤500 条应用 / ≤200 个分组) |
-| POST | `/api/apps/detect-links` | 管理员 | 按渠道自动推导官网与下载地址,返回 `{appUrl,downloadUrl,source}` |
+| POST | `/api/apps/import` | 管理员 | 导入配置文件,覆盖当前列表与分组(单次 ≤500 条应用 / ≤200 个分组;v1 备份不清空分组) |
+| POST | `/api/apps/detect-links` | 管理员 | 按渠道自动推导官网与下载地址,返回 `{appUrl,downloadUrl,downloads,source}` |
+| GET | `/api/diagnostics` | 管理员 | 配置诊断:各项密钥/绑定状态 + GitHub 实时额度 + 分级建议 |
 | GET | `/api/groups` | 公开 | 获取分组列表 |
 | POST | `/api/groups` | 管理员 | 新建分组 |
 | PUT | `/api/groups/:id` | 管理员 | 重命名 / 折叠状态 / 顺序 |
@@ -301,6 +318,16 @@ npm test         # API + 定时推送冒烟测试(离线)
   "packageId": "vlc",
   "version": "3.0.20",
   "notify": true,
+  "groupId": "a1b2…",
+  "order": 0,
+  "appUrl": "https://www.videolan.org/vlc/",
+  "linkName": true,
+  "downloadUrl": "https://github.com/videolan/vlc/releases/download/3.0.24/vlc-3.0.24-win64.exe",
+  "downloads": [
+    { "name": "vlc-3.0.24-win64.exe", "url": "https://…/vlc-3.0.24-win64.exe", "score": 100, "kind": "exe", "arch": "x64" },
+    { "name": "vlc-3.0.24-win64.msi", "url": "https://…/vlc-3.0.24-win64.msi", "score": 95, "kind": "msi", "arch": "x64" }
+  ],
+  "iconUrl": "",
   "latestVersion": "3.0.24",
   "releaseUrl": "https://community.chocolatey.org/packages/vlc",
   "publishedAt": "2026-09-23T03:15:35Z",
@@ -309,6 +336,16 @@ npm test         # API + 定时推送冒烟测试(离线)
   "note": ""
 }
 ```
+
+> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
+
+分组记录示例:
+
+```json
+{ "id": "a1b2…", "name": "浏览器", "order": 0, "collapsed": false, "createdAt": "2026-11-02T00:00:00Z" }
+```
+
+> `collapsed` 字段仅为向后兼容保留;**实际折叠状态存在各访客的 localStorage 中**(`av_collapsed`),不随服务端同步。
 
 ## 许可
 
