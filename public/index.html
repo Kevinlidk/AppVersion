@@ -914,6 +914,25 @@ function fmtTime(iso) {
   return d.toLocaleString("zh-CN", opts);
 }
 
+/**
+ * 相对时间:让「检查于」随时间自然走动,无需手动刷新页面。
+ *   < 1 分钟 → 刚刚;< 60 分钟 → N 分钟前;< 24 小时 → N 小时前;
+ *   更早 → 退回绝对时间(同 fmtTime)
+ */
+function fmtRelative(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  if (diff < 0) return "刚刚";
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return min + " 分钟前";
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + " 小时前";
+  return fmtTime(iso);
+}
+
 /* ── 登录态 ── */
 
 async function initSession() {
@@ -1271,7 +1290,11 @@ function cardHtml(a) {
   const meta = [];
   if (src.url) meta.push('<a href="' + esc(src.url) + '" target="_blank" rel="noopener">' + esc(src.label) + "</a>");
   else meta.push(esc(src.label));
-  if (a.lastCheckedAt) meta.push("检查于 " + esc(fmtTime(a.lastCheckedAt)));
+  // 相对时间 + 绝对时间提示:时间会随页面停留自然走动,悬停可看精确值
+  if (a.lastCheckedAt) {
+    meta.push('<span title="' + esc(fmtTime(a.lastCheckedAt)) + '">检查于 ' +
+      esc(fmtRelative(a.lastCheckedAt)) + "</span>");
+  }
   const actions = isAdmin ? `
       <div class="card-actions">
         ${!manual ? '<button class="btn act-refresh">⟳ 刷新</button>' : ""}
@@ -1413,6 +1436,34 @@ function loadFaviconBase() {
   });
 }
 
+/**
+ * 替换标签页图标。
+ * 必须清掉 head 中已有的全部 icon 声明:<link rel="alternate icon" sizes="any">
+ * 会让浏览器继续优先使用静态 ico,导致动态角标不生效。
+ */
+function setTabIcon(href, type) {
+  document.querySelectorAll('link[rel="icon"], link[rel="alternate icon"]').forEach((l) => l.remove());
+  if (!href) {
+    // 还原为静态图标(与 <head> 中的原始声明一致)
+    const svg = document.createElement("link");
+    svg.rel = "icon";
+    svg.type = "image/svg+xml";
+    svg.href = FAVICON_BASE;
+    const ico = document.createElement("link");
+    ico.rel = "alternate icon";
+    ico.href = "favicon.ico";
+    ico.setAttribute("sizes", "any");
+    document.head.append(svg, ico);
+    return null;
+  }
+  const link = document.createElement("link");
+  link.rel = "icon";
+  link.type = type || "image/png";
+  link.href = href;
+  document.head.appendChild(link);
+  return link;
+}
+
 function drawFaviconBadge(img, count) {
   const S = 128;                        // 2x 渲染,高分屏标签页更清晰
   const cv = document.createElement("canvas");
@@ -1458,23 +1509,16 @@ function updateFaviconBadge(count) {
   if (n === faviconBadgeCount) return;  // 数量未变,无需重绘
   faviconBadgeCount = n;
   if (n <= 0) {
-    // 移除动态图标后,<head> 中的静态 favicon.svg 自动生效
     if (faviconBadgeLink) {
-      faviconBadgeLink.remove();
       faviconBadgeLink = null;
+      setTabIcon(null);                 // 还原静态图标
     }
     return;
   }
   loadFaviconBase()
     .then((img) => {
       if (faviconBadgeCount !== n) return;  // 加载期间数量又变了,以最新值为准
-      if (!faviconBadgeLink) {
-        faviconBadgeLink = document.createElement("link");
-        faviconBadgeLink.rel = "icon";
-        faviconBadgeLink.type = "image/png";
-        document.head.appendChild(faviconBadgeLink);
-      }
-      faviconBadgeLink.href = drawFaviconBadge(img, n);
+      faviconBadgeLink = setTabIcon(drawFaviconBadge(img, n), "image/png");
     })
     .catch(() => { /* 图标加载失败时忽略,不影响主流程 */ });
 }
@@ -2697,11 +2741,60 @@ $("#editModeBtn").addEventListener("click", () => setEditMode(!editMode));
 $("#exitEditBtn").addEventListener("click", () => setEditMode(false));
 $("#addGroupBtn").addEventListener("click", createGroup);
 
+/* ── 静默轮询 ──────────────────────────────────────────
+   后台定时检查(GitHub Actions / 手动)会更新 KV 里的 lastCheckedAt 与版本,
+   但页面本身不会自己重新拉数据,导致「检查于」停在打开页面那一刻。
+   这里做两件事:
+     1. 每 30 秒重绘一次,让相对时间("N 分钟前")自然走动;
+     2. 每 60 秒静默拉一次数据,同步后台检查结果(不打扰用户操作)。
+   为避免打断正在进行的操作,拖拽中、弹窗打开、编辑布局、输入框聚焦时都会跳过。 */
+const POLL_INTERVAL_MS = 60000;
+const CLOCK_TICK_MS = 30000;
+let pollTimer = null;
+let clockTimer = null;
+
+/** 当前是否处于「不宜重绘/刷新」的状态 */
+function isBusy() {
+  if (dragAppId || dragGroupId) return true;          // 正在拖拽
+  if (document.querySelector("dialog[open]")) return true;  // 弹窗打开中
+  if (typeof editMode !== "undefined" && editMode) return true;  // 编辑布局中
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;  // 正在输入
+  if (document.hidden) return true;                   // 标签页在后台
+  return false;
+}
+
+/** 静默同步服务端数据:不显示 loading、不弹 toast,失败也不打扰用户 */
+async function silentSync() {
+  if (isBusy()) return;
+  try {
+    const [appList, groupList] = await Promise.all([api("/api/apps"), api("/api/groups")]);
+    apps = appList;
+    groups = groupList;
+    render();
+  } catch { /* 网络抖动或未登录,保持现有界面 */ }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(silentSync, POLL_INTERVAL_MS);
+  clockTimer = setInterval(() => {
+    if (isBusy()) return;
+    render();   // 仅重绘,让相对时间文案走动
+  }, CLOCK_TICK_MS);
+}
+
+// 从后台切回前台时立即同步一次,避免看到过期数据
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) silentSync();
+});
+
 (async () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   await initSession();
   renderAdminUi();
   await load();
+  startPolling();
 })();
 </script>
 <!-- 动态背景:与参考项目完全一致的接线方式 ——
