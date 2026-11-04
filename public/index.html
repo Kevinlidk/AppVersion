@@ -1397,6 +1397,88 @@ function isLastGroup(g) {
   return sorted.length ? sorted[sorted.length - 1].id === g.id : true;
 }
 
+/* ── 标签页图标角标:有可更新应用时在图标左下角显示数量 ── */
+const FAVICON_BASE = "favicon.svg";
+let faviconBaseImg = null;      // 基础图标(缓存,避免重复加载)
+let faviconBadgeCount = -1;     // 上次绘制的数量;-1 表示尚未初始化
+let faviconBadgeLink = null;    // 动态生成的 <link rel="icon">
+
+function loadFaviconBase() {
+  if (faviconBaseImg) return Promise.resolve(faviconBaseImg);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => { faviconBaseImg = img; resolve(img); };
+    img.onerror = reject;
+    img.src = FAVICON_BASE;
+  });
+}
+
+function drawFaviconBadge(img, count) {
+  const S = 128;                        // 2x 渲染,高分屏标签页更清晰
+  const cv = document.createElement("canvas");
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(img, 0, 0, S, S);
+
+  const label = count > 99 ? "99+" : String(count);
+  const r = label.length > 2 ? 28 : 22;
+  const cx = r + 2;
+  const cy = S - r - 2;                 // 左下角,避开图标右下角的蓝色勾选标
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#e5484d";
+  ctx.fill();
+  ctx.lineWidth = 5;                    // 白色描边,与任意底色区分
+  ctx.strokeStyle = "#fff";
+  ctx.stroke();
+
+  // 字号自适应:位数越多越小,确保不溢出圆形(留出描边余量)
+  let fontSize = label.length > 2 ? 26 : label.length > 1 ? 30 : 34;
+  do {
+    ctx.font = "700 " + fontSize + "px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    if (ctx.measureText(label).width <= r * 1.28 || fontSize <= 11) break;
+    fontSize -= 1;
+  } while (true);
+
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  // 用字形实际上下边界居中(仅靠 middle 基线时数字会偏上)
+  const m = ctx.measureText(label);
+  const ascent = m.actualBoundingBoxAscent || fontSize * 0.72;
+  const descent = m.actualBoundingBoxDescent || fontSize * 0.28;
+  ctx.fillText(label, cx, cy + (ascent - descent) / 2);
+  return cv.toDataURL("image/png");
+}
+
+/** 有可更新应用时在标签页图标上显示数量;数量归零则还原为静态图标 */
+function updateFaviconBadge(count) {
+  const n = Number(count) || 0;
+  if (n === faviconBadgeCount) return;  // 数量未变,无需重绘
+  faviconBadgeCount = n;
+  if (n <= 0) {
+    // 移除动态图标后,<head> 中的静态 favicon.svg 自动生效
+    if (faviconBadgeLink) {
+      faviconBadgeLink.remove();
+      faviconBadgeLink = null;
+    }
+    return;
+  }
+  loadFaviconBase()
+    .then((img) => {
+      if (faviconBadgeCount !== n) return;  // 加载期间数量又变了,以最新值为准
+      if (!faviconBadgeLink) {
+        faviconBadgeLink = document.createElement("link");
+        faviconBadgeLink.rel = "icon";
+        faviconBadgeLink.type = "image/png";
+        document.head.appendChild(faviconBadgeLink);
+      }
+      faviconBadgeLink.href = drawFaviconBadge(img, n);
+    })
+    .catch(() => { /* 图标加载失败时忽略,不影响主流程 */ });
+}
+
 function render() {
   const q = filter.q.trim().toLowerCase();
   const shown = apps.filter((a) => {
@@ -1407,6 +1489,8 @@ function render() {
   });
   const shownIds = new Set(shown.map((a) => a.id));
   const updateCount = apps.filter((a) => statusOf(a) === "update").length;
+  // 标签页图标角标:有可更新应用时显示数量
+  updateFaviconBadge(updateCount);
   // 「N 个有更新」做成可点击按钮:点击只看有更新的应用,再次点击取消筛选
   if (!apps.length) {
     $("#stats").innerHTML = "";
