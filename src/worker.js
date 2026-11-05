@@ -1336,7 +1336,9 @@ async function sendNotifications(env, found) {
  */
 async function runUpdateCheck(env) {
   const list = await readApps(env);
-  const targets = list.filter((a) => a.channel !== "manual" && a.notify !== false);
+  // 定时检查覆盖全部自动渠道应用(让页面版本/检查时间始终保持新鲜);
+  // notify 只决定「发现更新时是否推送」,不影响是否检查。
+  const targets = list.filter((a) => a.channel !== "manual");
   const gap = env.CHECK_GAP_MS !== undefined ? Number(env.CHECK_GAP_MS) : 500;
 
   const found = [];
@@ -1360,10 +1362,12 @@ async function runUpdateCheck(env) {
     if (gap > 0) await sleep(gap);
   }
 
+  // 只有开启通知的应用才推送(以及记录 notifiedVersion 防重复)
+  const toNotify = found.filter((f) => f.app.notify !== false);
   let notified = false;
-  if (found.length) {
-    notified = await sendNotifications(env, found);
-    if (notified) for (const f of found) f.app.notifiedVersion = f.version;
+  if (toNotify.length) {
+    notified = await sendNotifications(env, toNotify);
+    if (notified) for (const f of toNotify) f.app.notifiedVersion = f.version;
   }
   await writeApps(env, list);
 

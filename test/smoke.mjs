@@ -1192,10 +1192,13 @@ await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,noti
   assertEq(a2.notifiedVersion, "2.0.0", "A 记录 notifiedVersion");
   const c2 = list.find((x) => x.name === "应用C");
   if (!c2.lastCheckedAt) throw new Error("C 未更新检查时间");
+  // notify:false 仍会被定时检查(保持版本/检查时间新鲜),只是不推送
   const b2 = list.find((x) => x.name === "应用B");
-  if (b2.lastCheckedAt) throw new Error("B 不应被检查(notify:false)");
+  if (!b2.lastCheckedAt) throw new Error("B 应被检查但不推送(notify:false)");
+  assertEq(b2.latestVersion, "2.0.0", "B 的版本已刷新");
+  if (b2.notifiedVersion) throw new Error("B 不应记录 notifiedVersion(未推送)");
   const d2 = list.find((x) => x.name === "应用D");
-  if (d2.latestVersion !== undefined) throw new Error("D 不应被查询");
+  if (d2.latestVersion !== undefined) throw new Error("D 不应被查询(manual 渠道)");
 
   // 第二次定时检查:无新版本,不重复推送
   await runScheduled(env2);
