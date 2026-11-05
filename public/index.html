@@ -1862,11 +1862,13 @@ function groupSectionHtml(group, list, shownIds) {
   // 非编辑模式:该组没有匹配项就整组隐藏;编辑模式保留空组便于往里拖卡片
   if (!visible.length && !editMode) return "";
 
-  const count = list.length;
-  const updateCount = list.filter((a) => statusOf(a) === "update").length;
+  // 计数与「待更新」都基于筛选后可见的应用:渠道/搜索/待更新筛选时,
+  // 分组头反映当前实际显示的数量(无筛选时 visible === list,数字不变)
+  const shownCount = visible.length;
+  const shownUpdates = visible.filter((a) => statusOf(a) === "update").length;
   const title = group ? esc(group.name) : t("ungrouped");
-  const stats = `<span class="grp-count">${count}</span>` +
-    (updateCount ? `<span class="grp-updates">${t("grp_to_update", { n: updateCount })}</span>` : "");
+  const stats = `<span class="grp-count">${shownCount}</span>` +
+    (shownUpdates ? `<span class="grp-updates">${t("grp_to_update", { n: shownUpdates })}</span>` : "");
   // B1: 从未创建过分组时,「未分组」区不显示标题,保持纯卡片观感
   const headerInner = group
     ? `<button type="button" class="grp-toggle" data-gid="${group.id}" aria-expanded="${!collapsed}" title="${collapsed ? t("expand") : t("collapse")}">
