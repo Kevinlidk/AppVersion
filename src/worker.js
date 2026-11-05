@@ -24,6 +24,20 @@
 
 const LIST_KEY = "apps:v1";
 const GROUPS_KEY = "groups:v1";
+const SETTINGS_KEY = "settings:v1";
+
+/** 读取站点功能开关;未写入过/损坏时回退默认值(全部开启) */
+async function readSettings(env) {
+  const defaults = { hitokoto: true };
+  try {
+    const raw = await kv(env).get(SETTINGS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    return { ...defaults, ...(parsed && typeof parsed === "object" ? parsed : {}) };
+  } catch {
+    return defaults;
+  }
+}
 const SEED_KEY = "seeded:v1";
 const UA = "app-version-worker/1.2 (+https://github.com/Kevinlidk/AppVersion)";
 /* Chocolatey 的 WAF 对裸请求较敏感,补齐常规请求头以降低被 403 的概率 */
@@ -1469,6 +1483,25 @@ async function handleApi(request, env, pathname) {
       admin: await isAdminRequest(env, request),
       configured: Boolean(env && env.ADMIN_PASSWORD),
     });
+  }
+
+  /* ── 站点功能开关(管理员可改;访客可读) ── */
+
+  if (pathname === "/api/settings" && method === "GET") {
+    return json(await readSettings(env));
+  }
+  if (pathname === "/api/settings" && method === "PUT") {
+    await requireAdmin(env, request);
+    const body = await readJson(request, true);
+    const cur = await readSettings(env);
+    if (body && body.hitokoto !== undefined) {
+      if (typeof body.hitokoto !== "boolean") {
+        throw new ApiError("hitokoto 必须为布尔值(true/false)", 400);
+      }
+      cur.hitokoto = body.hitokoto;
+    }
+    await kv(env).put(SETTINGS_KEY, JSON.stringify(cur));
+    return json(cur);
   }
 
   if (pathname === "/api/login" && method === "POST") {

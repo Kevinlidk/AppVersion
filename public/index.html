@@ -555,7 +555,6 @@
     align-items: flex-end; gap: 10px;
     z-index: 25; pointer-events: none;
     max-width: min(360px, calc(100vw - 100px));
-    max-height: 0; overflow: hidden;
   }
   #hitokotoStage.hk-collapsed { visibility: hidden; }
   .hk-bubble {
@@ -733,6 +732,7 @@
     <button id="diagBtn" class="btn" data-i18n="diag_btn">🩺 配置检查</button>
     <button id="exportBtn" class="btn" data-i18n="export_btn">⬇ 导出配置</button>
     <button id="importBtn" class="btn" data-i18n="import_btn">⬆ 导入配置</button>
+    <button id="hkToggleBtn" class="btn" aria-pressed="true">💬 一言气泡 · 开</button>
     <button id="editModeBtn" class="btn" data-i18n="edit_layout">✎ 编辑布局</button>
   </div>
 
@@ -906,6 +906,7 @@ let apps = [];
 let groups = [];
 let editMode = false;
 let filter = { q: "", channel: "all", updatesOnly: false };
+let siteSettings = { hitokoto: true };   // 站点功能开关(管理员可改)
 let editingId = null;
 let lang = localStorage.getItem("av_lang") === "en" ? "en" : "zh";
 
@@ -1098,6 +1099,11 @@ const I18N = {
     moved_to: "已移动到「{n}」",
     hitokoto_tag: "一言",
     hk_close: "收起",
+    hk_toggle: "💬 一言气泡",
+    hk_state_on: "开",
+    hk_state_off: "关",
+    hk_enabled: "一言气泡已开启",
+    hk_disabled: "一言气泡已关闭",
     diag_kv: "KV 存储",
     diag_admin: "管理员密码",
     diag_cron: "定时检查令牌",
@@ -1318,6 +1324,11 @@ const I18N = {
     moved_to: 'Moved to "{n}"',
     hitokoto_tag: "Hitokoto",
     hk_close: "Dismiss",
+    hk_toggle: "💬 Hitokoto bubble",
+    hk_state_on: "On",
+    hk_state_off: "Off",
+    hk_enabled: "Hitokoto bubble enabled",
+    hk_disabled: "Hitokoto bubble disabled",
     diag_kv: "KV storage",
     diag_admin: "Admin password",
     diag_cron: "Cron token",
@@ -1499,6 +1510,7 @@ function renderAdminUi() {
   // 退出登录时收起诊断面板(它含配置信息,不应给访客看)
   if (!isAdmin) $("#diagPanel").classList.add("hidden");
   $("#editModeBtn").textContent = editMode ? t("editing") : t("edit_layout");
+  syncHkToggle();
   render();
 }
 
@@ -2112,9 +2124,12 @@ function render() {
 
 async function load() {
   try {
-    const [appList, groupList] = await Promise.all([api("/api/apps"), api("/api/groups")]);
+    const [appList, groupList, settings] = await Promise.all([
+      api("/api/apps"), api("/api/groups"), api("/api/settings").catch(() => siteSettings),
+    ]);
     apps = appList;
     groups = groupList;
+    siteSettings = settings;
     render();
   } catch (e) {
     listEl.innerHTML = `
@@ -3415,11 +3430,26 @@ function hkShow() {
   // 双 rAF 确保初始态已提交,再触发过渡动画
   requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("show")));
   setTimeout(() => hkDismiss(el), HK_HOLD_MS);
-  // 空间偏小(页脚下方只够一条)时,把旧的挤掉,只留最新
-  const now = hkUpdateAvail();
-  if (now < 100) {
-    [...stage.querySelectorAll(".hk-bubble:not(.hide)")]
-      .slice(0, -1).forEach((b) => hkDismiss(b, true));
+  hkFitBubbles();
+}
+
+/** 按可用空间回收气泡:总高度超出时从最旧的开始退场;
+   单条就放不下时整条不显示(替代 overflow 裁剪,避免阴影被切出角框) */
+function hkFitBubbles() {
+  const stage = document.getElementById("hitokotoStage");
+  if (!stage) return;
+  const avail = hkUpdateAvail();
+  const alive = [...stage.querySelectorAll(".hk-bubble:not(.hide)")];
+  if (!alive.length) return;
+  const gap = 10;
+  let total = alive.reduce((sum, b) => sum + b.offsetHeight, 0) + gap * (alive.length - 1);
+  if (total > avail) {
+    // 从最旧的开始退场,直到放得下;只剩最新一条仍放不下则整条退场
+    for (let i = 0; i < alive.length - 1 && total > avail; i++) {
+      hkDismiss(alive[i], true);
+      total -= alive[i].offsetHeight + gap;
+    }
+    if (total > avail) hkDismiss(alive[alive.length - 1], true);
   }
 }
 
@@ -3435,7 +3465,6 @@ function hkUpdateAvail() {
   // 天花板 = 页脚「文字」底部(元素 rect 含自身 padding,需扣除)+ 少量间隙
   const stripTop = fRect.bottom - fPadBottom + 6;
   const avail = Math.max(0, Math.round(window.innerHeight - bottomOffset - stripTop));
-  stage.style.maxHeight = avail + "px";
   stage.classList.toggle("hk-collapsed", avail < 56);
   return avail;
 }
@@ -3450,6 +3479,42 @@ function hkStart() {
   hkTimer = setInterval(hkShow, HK_HOLD_MS + HK_GAP_MS);
 }
 
+/** 停止轮播并清掉屏幕上的气泡(管理员开关关闭时调用) */
+function hkStop() {
+  if (hkTimer) {
+    clearInterval(hkTimer);
+    hkTimer = null;
+  }
+  document.querySelectorAll(".hk-bubble").forEach((b) => hkDismiss(b, true));
+}
+
+/** 开关按钮文案/状态同步 */
+function syncHkToggle() {
+  const btn = $("#hkToggleBtn");
+  if (!btn) return;
+  const on = siteSettings.hitokoto === true;
+  btn.textContent = t("hk_toggle") + " · " + (on ? t("hk_state_on") : t("hk_state_off"));
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+}
+
+$("#hkToggleBtn").addEventListener("click", async () => {
+  const next = !(siteSettings.hitokoto === true);
+  try {
+    siteSettings = await api("/api/settings", { method: "PUT", body: { hitokoto: next } });
+    syncHkToggle();
+    toast(t(next ? "hk_enabled" : "hk_disabled"));
+    if (next) {
+      hkQueue = [];
+      hkStart();
+      setTimeout(hkShow, 120);   // 开启后立即来一条,反馈直观
+    } else {
+      hkStop();
+    }
+  } catch (e) {
+    toast(e.message, "error");
+  }
+});
+
 $("#langToggle").addEventListener("click", () => {
   setLang(lang === "zh" ? "en" : "zh");
 });
@@ -3462,7 +3527,7 @@ $("#langToggle").addEventListener("click", () => {
   renderAdminUi();
   await load();
   startPolling();
-  hkStart();
+  if (siteSettings.hitokoto === true) hkStart();
 })();
 </script>
 <!-- 动态背景:与参考项目完全一致的接线方式 ——

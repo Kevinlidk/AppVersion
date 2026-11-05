@@ -755,6 +755,39 @@ await test("diagnostics:仅管理员可访问,返回配置状态与 GitHub 额�
   if (!Array.isArray(d.hints)) throw new Error("缺少 hints");
 });
 
+await test("settings:访客可读,仅管理员可改 hitokoto 开关", async () => {
+  const envS = { APP_KV: makeKV(), ADMIN_PASSWORD: "ps" };
+  // 访客 GET:默认全开
+  const anon = await worker.fetch(new Request("http://localhost/api/settings"), envS, ctx);
+  assertEq(anon.status, 200, "访客 GET 状态码");
+  assertEq((await bodyOf(anon)).hitokoto, true, "默认开启");
+
+  // 访客 PUT:401
+  const anonPut = await worker.fetch(
+    new Request("http://localhost/api/settings", { method: "PUT", body: JSON.stringify({ hitokoto: false }) }),
+    envS, ctx
+  );
+  assertEq(anonPut.status, 401, "未登录 PUT 应 401");
+
+  // 管理员 PUT 关闭 → GET 反映;再开启恢复
+  const { cookie } = await loginAs(envS, "ps");
+  const put = async (payload) => worker.fetch(new Request("http://localhost/api/settings", {
+    method: "PUT", headers: { "content-type": "application/json", cookie: "av_session=" + cookie },
+    body: JSON.stringify(payload),
+  }), envS, ctx);
+  const off = await bodyOf(await put({ hitokoto: false }));
+  assertEq(off.hitokoto, false, "关闭生效");
+  assertEq((await bodyOf(await worker.fetch(new Request("http://localhost/api/settings"), envS, ctx))).hitokoto,
+    false, "GET 反映关闭状态");
+
+  // 非布尔值 → 400
+  const bad = await put({ hitokoto: "yes" });
+  assertEq(bad.status, 400, "非法值应 400");
+
+  const on = await bodyOf(await put({ hitokoto: true }));
+  assertEq(on.hitokoto, true, "重新开启");
+});
+
 await test("diagnostics:未配置 GITHUB_TOKEN 时给出告警", async () => {
   const envE = { APP_KV: makeKV(), ADMIN_PASSWORD: "pe" };
   const { cookie } = await loginAs(envE, "pe");
