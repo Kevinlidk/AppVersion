@@ -544,13 +544,20 @@
   .empty .btn { margin-top: 14px; }
 
   /* ── 悬浮添加按钮 ── */
-  /* ── 一言气泡(hitokoto):右下角自动轮播,弹幕式进场/退场 ── */
+  /* ── 一言气泡(hitokoto):右下角自动轮播,弹幕式进场/退场 ──
+     位置:＋ 按钮左侧同行(bottom 对齐 FAB),向上生长;
+     顶部不超过页脚文字高度(由 hkUpdateAvail 动态设 maxHeight),
+     空间不足时直接裁剪/隐藏 —— 滚动到哪里、有多少空间就显示多少 */
   #hitokotoStage {
-    position: fixed; right: 16px; bottom: calc(86px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+    position: fixed; right: calc(16px + 56px + 12px);
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; justify-content: flex-end;
+    align-items: flex-end; gap: 10px;
     z-index: 25; pointer-events: none;
-    max-width: min(360px, calc(100vw - 32px));
+    max-width: min(360px, calc(100vw - 100px));
+    max-height: 0; overflow: hidden;
   }
+  #hitokotoStage.hk-collapsed { visibility: hidden; }
   .hk-bubble {
     pointer-events: auto; position: relative;
     max-width: min(360px, calc(100vw - 32px));
@@ -664,7 +671,7 @@
   }
   dialog > .toast.show { transform: translateX(-50%) translateY(0); }
 
-  .footer { text-align: center; font-size: 12.5px; padding: 28px 0 96px; }
+  .footer { text-align: center; font-size: 12.5px; padding: 28px 0 128px; }
   .footer a { text-decoration: none; }
 </style>
 <script>
@@ -3387,6 +3394,8 @@ function hkDismiss(el, fast) {
 
 function hkShow() {
   hkPrefetch();
+  const avail = hkUpdateAvail();
+  if (avail < 56) return;     // 可用空间太小(页脚下方没地方):本轮不显示
   const data = hkQueue.shift();
   if (!data) return;          // 队列空(网络失败):本轮跳过,下轮自动再试
   hkPrefetch();               // 立即补货
@@ -3406,10 +3415,36 @@ function hkShow() {
   // 双 rAF 确保初始态已提交,再触发过渡动画
   requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("show")));
   setTimeout(() => hkDismiss(el), HK_HOLD_MS);
+  // 空间偏小(页脚下方只够一条)时,把旧的挤掉,只留最新
+  const now = hkUpdateAvail();
+  if (now < 100) {
+    [...stage.querySelectorAll(".hk-bubble:not(.hide)")]
+      .slice(0, -1).forEach((b) => hkDismiss(b, true));
+  }
+}
+
+/** 计算页脚文字下方的可用高度,作为气泡容器的上限(滚动/缩放时实时更新) */
+function hkUpdateAvail() {
+  // 先确保容器存在(maxHeight 0 时不可见),否则 computed bottom 读不到
+  const stage = hkStage();
+  const footer = document.querySelector(".footer");
+  if (!footer) return 0;
+  const bottomOffset = parseFloat(getComputedStyle(stage).bottom) || 16;
+  const fRect = footer.getBoundingClientRect();
+  const fPadBottom = parseFloat(getComputedStyle(footer).paddingBottom) || 0;
+  // 天花板 = 页脚「文字」底部(元素 rect 含自身 padding,需扣除)+ 少量间隙
+  const stripTop = fRect.bottom - fPadBottom + 6;
+  const avail = Math.max(0, Math.round(window.innerHeight - bottomOffset - stripTop));
+  stage.style.maxHeight = avail + "px";
+  stage.classList.toggle("hk-collapsed", avail < 56);
+  return avail;
 }
 
 function hkStart() {
   if (hkTimer) return;
+  hkUpdateAvail();
+  window.addEventListener("scroll", hkUpdateAvail, { passive: true });
+  window.addEventListener("resize", hkUpdateAvail);
   hkPrefetch(); hkPrefetch(); hkPrefetch();
   setTimeout(hkShow, 2600);   // 首条稍等页面稳定后再出现
   hkTimer = setInterval(hkShow, HK_HOLD_MS + HK_GAP_MS);
