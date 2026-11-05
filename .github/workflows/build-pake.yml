@@ -1,0 +1,250 @@
+name: Build Desktop App (Pake)
+
+# 把线上站点 https://appversion.kevinlidk.cn 用 Pake 打包成桌面应用,
+# 产物自动发布到本仓库的 Releases —— 无需在本地安装 Rust / Visual Studio 等工具。
+#
+# 触发方式:
+#   1. Actions 页手动 Run workflow(可选填版本号)
+#   2. 推送形如 v1.2.3 的 tag
+#   3. 按下面的 schedule 定期构建(默认关闭,取消注释即可)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "应用版本号(写入安装包,留空则用桌面端的版本文件)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+  # schedule:
+  #   - cron: "0 3 * * 1"   # 每周一 03:00 UTC 自动构建
+
+concurrency:
+  group: pake-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write        # 创建/更新 Release 需要
+
+env:
+  APP_URL: "https://appversion.kevinlidk.cn"
+  APP_NAME: "AppVersion"
+  APP_IDENTIFIER: "cn.kevinlidk.appversion"
+  NODE_VERSION: "22"
+  PAKE_CLI: "3.18.0"
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows-x64
+            artifact: AppVersion-Windows
+          - os: macos-latest
+            label: macOS-arm64
+            artifact: AppVersion-macOS-arm64
+          - os: ubuntu-24.04
+            label: Linux-x64
+            artifact: AppVersion-Linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: ver
+        shell: bash
+        run: |
+          RAW="${{ inputs.app_version }}"
+          if [ -z "$RAW" ]; then
+            # tag 触发时用 tag 名(去掉 v 前缀),否则退回 1.0.0
+            RAW="${GITHUB_REF_NAME#v}"
+            case "$RAW" in
+              v*|main|master|"") RAW="1.0.0" ;;
+            esac
+          fi
+          # Pake 要求 semver 数字形式
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
+          echo "使用版本号: $RAW"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pake-${{ matrix.os }}
+
+      # Linux 构建 Tauri 所需的系统库(取自 Pake 官方 setup-env)
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev \
+            build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev \
+            libglib2.0-dev libgirepository1.0-dev pkg-config
+
+      - name: 安装 Pake CLI
+        run: pnpm add -g pake-cli@${{ env.PAKE_CLI }}
+
+      - name: 构建应用
+        id: build
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          mkdir -p out
+          args=(
+            "$APP_URL"
+            --name "$APP_NAME"
+            --identifier "$APP_IDENTIFIER"
+            --icon "$PWD/desktop/app-icon.png"
+            --app-version "$VERSION"
+            --width 1280
+            --height 860
+            --new-window
+            --json
+          )
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            args+=(--targets x64)
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            args+=(--targets arm64)
+          else
+            args+=(--targets deb)
+          fi
+          echo "执行: pake ${args[*]}"
+          set +e
+          pake "${args[@]}" > pake-result.json 2> pake-log.txt
+          code=$?
+          set -e
+          tail -30 pake-log.txt || true
+          echo "--- 结果 JSON ---"
+          cat pake-result.json || true
+          if [ $code -ne 0 ]; then
+            echo "::error::Pake 构建失败(exit $code)"
+            exit $code
+          fi
+          node -e '
+            const fs=require("fs");
+            const r=JSON.parse(fs.readFileSync("pake-result.json","utf8"));
+            if (!r.ok) { console.error("构建失败:", r.error); process.exit(1); }
+            for (const o of r.outputs || []) console.log("产物:", o.path, o.format, o.sizeBytes);
+            fs.writeFileSync("out/paths.txt", (r.outputs||[]).map(o=>o.path).join("\n"));
+          '
+
+      - name: 收集产物
+        shell: bash
+        run: |
+          shopt -s nullglob
+          # Pake 会把安装包复制到当前目录;统一收拢到 out/
+          for f in *.msi *.dmg *.deb *.AppImage *.rpm; do
+            [ -f "$f" ] && mv -f "$f" out/ || true
+          done
+          ls -lh out || true
+          if ! ls out/*.msi out/*.dmg out/*.deb out/*.AppImage out/*.rpm >/dev/null 2>&1; then
+            echo "::error::未找到任何构建产物"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            out/*.msi
+            out/*.dmg
+            out/*.deb
+            out/*.AppImage
+            out/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: 发布到 Releases
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: ver
+        shell: bash
+        run: |
+          RAW="${{ inputs.app_version }}"
+          if [ -z "$RAW" ]; then
+            RAW="${GITHUB_REF_NAME#v}"
+            case "$RAW" in
+              v*|main|master|"") RAW="1.0.0" ;;
+            esac
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 整理文件名
+        shell: bash
+        run: |
+          mkdir -p release
+          cd dist
+          shopt -s nullglob
+          for f in *.msi; do cp -f "$f" "../release/AppVersion-${{ steps.ver.outputs.version }}-windows-x64.msi"; done
+          for f in *.dmg; do cp -f "$f" "../release/AppVersion-${{ steps.ver.outputs.version }}-macos-arm64.dmg"; done
+          for f in *.deb; do cp -f "$f" "../release/AppVersion-${{ steps.ver.outputs.version }}-linux-x64.deb"; done
+          for f in *.AppImage; do cp -f "$f" "../release/AppVersion-${{ steps.ver.outputs.version }}-linux-x64.AppImage"; done
+          for f in *.rpm; do cp -f "$f" "../release/AppVersion-${{ steps.ver.outputs.version }}-linux-x64.rpm"; done
+          cd ..
+          ls -lh release
+
+      - name: 创建/更新 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: AppVersion 桌面版 ${{ steps.ver.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## AppVersion 桌面版 ${{ steps.ver.outputs.version }}
+
+            由 [Pake](https://github.com/tw93/Pake) 基于 Tauri 打包,内含网页版
+            https://appversion.kevinlidk.cn —— 打开即用,无需浏览器。
+
+            | 平台 | 文件 |
+            | --- | --- |
+            | Windows 10/11 (x64) | `AppVersion-${{ steps.ver.outputs.version }}-windows-x64.msi` |
+            | macOS (Apple Silicon) | `AppVersion-${{ steps.ver.outputs.version }}-macos-arm64.dmg` |
+            | Linux (Debian/Ubuntu x64) | `AppVersion-${{ steps.ver.outputs.version }}-linux-x64.deb` |
+
+            > macOS 首次打开若提示「无法验证开发者」,右键点图标 → 打开,或在
+            > 系统设置 → 隐私与安全性 里选择「仍要打开」。
+            >
+            > Linux `.deb` 安装:`sudo apt install ./AppVersion-*.deb`
+          files: release/*
+          fail_on_unmatched_files: false
+
+      - name: 概要
+        run: |
+          {
+            echo "### ✅ AppVersion 桌面版 ${{ steps.ver.outputs.version }} 已发布"
+            echo ""
+            echo "下载地址:https://github.com/${{ github.repository }}/releases/tag/${{ steps.ver.outputs.tag }}"
+          } >> "$GITHUB_STEP_SUMMARY"
