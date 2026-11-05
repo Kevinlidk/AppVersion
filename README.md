@@ -96,11 +96,15 @@
 ```
 ├── src/worker.js        # Worker:REST API、多渠道版本查询、检查与通知推送
 ├── scripts/
-│   └── build-config.mjs # 部署前注入 KV_NAMESPACE_ID,生成 wrangler.generated.toml
+│   ├── build-config.mjs # 部署前注入 KV_NAMESPACE_ID,生成 wrangler.generated.toml
+│   └── make-app-icon.py # 生成桌面版图标 desktop/app-icon.png(1024×1024)
+├── desktop/
+│   └── app-icon.png     # Pake/Tauri 打包用图标
 ├── public/index.html    # 前端单页(Workers Static Assets 承载)
 ├── public/background/   # GlyphWind 动态背景套件(WebGL2,装饰性)
 ├── public/favicon.svg   # 站点图标(另有 favicon.ico / apple-touch-icon.png / icon-192.png)
 ├── .github/workflows/   # check-updates.yml:定时触发 /api/check
+│                        # build-pake.yml:三平台构建桌面版并发布 Releases
 ├── wrangler.toml        # Cloudflare Workers 基础配置(assets / 说明)
 ├── package.json
 └── test/
@@ -303,6 +307,31 @@ npm test         # API + 定时推送冒烟测试(离线,69 项)
 > 本地预览也可传入真实环境变量以验证完整链路,例如:
 > `GITHUB_TOKEN=xxx FEISHU_WEBHOOK_URL=https://… npm run serve`
 > (支持 `GITHUB_TOKEN` / `FEISHU_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_URL` / `SERVERCHAN_SENDKEY`)
+
+## 桌面版(GitHub Actions 在线构建)
+
+用 [Pake](https://github.com/tw93/Pake)(基于 Tauri)把网页封装成原生桌面应用,**全程在 GitHub Actions 上构建,本地不需要安装 Rust、Visual Studio 或 macOS 设备**。
+
+**下载安装包**:[Releases](https://github.com/Kevinlidk/AppVersion/releases) 页面
+
+| 平台 | 文件 | 安装方式 |
+| --- | --- | --- |
+| Windows 10/11 (x64) | `AppVersion-<版本>-windows-x64.msi` | 双击安装 |
+| macOS (Apple Silicon) | `AppVersion-<版本>-macos-arm64.dmg` | 拖入「应用程序」;首次打开需右键 → 打开 |
+| Linux (Debian/Ubuntu x64) | `AppVersion-<版本>-linux-x64.deb` | `sudo apt install ./AppVersion-*.deb` |
+
+**重新构建**([.github/workflows/build-pake.yml](.github/workflows/build-pake.yml)):
+
+1. **手动**:仓库 Actions → `Build Desktop App (Pake)` → Run workflow,可填版本号(如 `1.0.1`)
+2. **打标签**:`git tag v1.0.1 && git push origin v1.0.1` —— 自动用 tag 号作为版本
+3. **定时**:workflow 里已附 weekly cron,取消注释即可每周自动构建
+
+三个平台并行构建(约 10–15 分钟,有缓存后约 5 分钟),全部成功后由 `release` job 聚合成一个 Release。
+
+**自定义**:修改 workflow 顶部的 `APP_URL` / `APP_NAME` / `APP_IDENTIFIER` 即可换目标站点;图标为 `desktop/app-icon.png`(1024×1024,由 `scripts/make-app-icon.py` 从 `public/favicon.svg` 的几何结构生成,改了图标重跑该脚本即可)。
+
+> 打包应用访问的仍是线上地址,内容与服务端更新即时生效,无需重新打包;只有**图标、窗口尺寸、应用名**这类外壳变化才需要重新构建。
+> 构建产物不受本项目的 MIT 式许可约束的部分(Pake/Tauri 运行时)遵循其各自许可。
 
 ## API 一览
 
