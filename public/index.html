@@ -544,6 +544,41 @@
   .empty .btn { margin-top: 14px; }
 
   /* ── 悬浮添加按钮 ── */
+  /* ── 一言气泡(hitokoto):右下角自动轮播,弹幕式进场/退场 ── */
+  #hitokotoStage {
+    position: fixed; right: 16px; bottom: calc(86px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+    z-index: 25; pointer-events: none;
+    max-width: min(360px, calc(100vw - 32px));
+  }
+  .hk-bubble {
+    pointer-events: auto; position: relative;
+    max-width: min(360px, calc(100vw - 32px));
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: var(--shadow-pop);
+    padding: 10px 30px 9px 14px;
+    color: var(--text);
+    opacity: 0; transform: translateX(28px);
+    transition: opacity .45s ease, transform .45s ease;
+  }
+  .hk-bubble.show { opacity: 1; transform: translateX(0); }
+  .hk-bubble.hide { opacity: 0; transform: translateX(28px); }
+  .hk-tag { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: .5px; margin-bottom: 4px; }
+  .hk-text {
+    font-size: 13px; line-height: 1.7;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .hk-from { margin-top: 5px; font-size: 11.5px; color: var(--muted); text-align: right; }
+  .hk-close {
+    position: absolute; top: 6px; right: 6px;
+    width: 20px; height: 20px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: none; background: transparent; cursor: pointer;
+    color: var(--muted); font-size: 11px; border-radius: 6px;
+    transition: color .12s, background .12s;
+  }
+  .hk-close:hover { color: var(--text); background: var(--accent-weak); }
+
   .fab {
     position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
     width: 56px; height: 56px; border-radius: 50%;
@@ -1054,6 +1089,8 @@ const I18N = {
     group_del_plain: "删除分组「{n}」?",
     group_deleted: "已删除分组",
     moved_to: "已移动到「{n}」",
+    hitokoto_tag: "一言",
+    hk_close: "收起",
     diag_kv: "KV 存储",
     diag_admin: "管理员密码",
     diag_cron: "定时检查令牌",
@@ -1272,6 +1309,8 @@ const I18N = {
     group_del_plain: 'Delete group "{n}"?',
     group_deleted: "Group deleted",
     moved_to: 'Moved to "{n}"',
+    hitokoto_tag: "Hitokoto",
+    hk_close: "Dismiss",
     diag_kv: "KV storage",
     diag_admin: "Admin password",
     diag_cron: "Cron token",
@@ -3294,6 +3333,88 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // 语言切换:中文 ↔ English(按钮在深浅色图标与 GitHub 图标之间)
+/* ── 一言气泡:右下角自动轮播(v1.hitokoto.cn) ───────────────
+   预取一个小队列平滑网络波动;每轮显示一条气泡(HOLD),退场后间隔
+   GAP 再来下一条;最多同时 2 条,超出时最旧的立即退场。
+   接口失败/离线时静默跳过,下个周期自动重试,不影响页面功能。 */
+const HK_URL = "https://v1.hitokoto.cn/?max_length=60";
+const HK_HOLD_MS = 8000;     // 单条气泡停留时长
+const HK_GAP_MS = 6000;      // 两条之间的间隔
+const HK_MAX_VISIBLE = 2;
+let hkQueue = [];
+let hkFetching = false;
+let hkTimer = null;
+
+function hkStage() {
+  let el = document.getElementById("hitokotoStage");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "hitokotoStage";
+    el.setAttribute("aria-live", "polite");
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+/** 预取句子(不足 3 条时补 1 条;一次请求一条,频率对 API 无压力) */
+async function hkPrefetch() {
+  if (hkFetching || hkQueue.length >= 3) return;
+  hkFetching = true;
+  try {
+    const res = await fetch(HK_URL);
+    if (res.ok) {
+      const d = await res.json();
+      if (d && d.hitokoto) hkQueue.push(d);
+    }
+  } catch { /* 离线/被拦:静默跳过 */ }
+  hkFetching = false;
+}
+
+function hkFromLine(d) {
+  const parts = [];
+  if (d.from_who) parts.push(d.from_who);
+  if (d.from) parts.push("「" + d.from + "」");
+  return parts.length ? "—— " + parts.join(" ") : "";
+}
+
+function hkDismiss(el, fast) {
+  if (!el || el.dataset.gone) return;
+  el.dataset.gone = "1";
+  el.classList.remove("show");
+  el.classList.add("hide");
+  setTimeout(() => el.remove(), fast ? 250 : 500);
+}
+
+function hkShow() {
+  hkPrefetch();
+  const data = hkQueue.shift();
+  if (!data) return;          // 队列空(网络失败):本轮跳过,下轮自动再试
+  hkPrefetch();               // 立即补货
+  const stage = hkStage();
+  const alive = [...stage.querySelectorAll(".hk-bubble:not(.hide)")];
+  if (alive.length >= HK_MAX_VISIBLE) hkDismiss(alive[0], true);
+  const el = document.createElement("div");
+  el.className = "hk-bubble";
+  const from = hkFromLine(data);
+  el.innerHTML =
+    `<div class="hk-tag">💬 ${esc(t("hitokoto_tag"))}</div>` +
+    `<p class="hk-text">${esc(data.hitokoto)}</p>` +
+    (from ? `<div class="hk-from">${esc(from)}</div>` : "") +
+    `<button type="button" class="hk-close" title="${esc(t("hk_close"))}" aria-label="${esc(t("hk_close"))}">✕</button>`;
+  el.querySelector(".hk-close").addEventListener("click", () => hkDismiss(el));
+  stage.appendChild(el);
+  // 双 rAF 确保初始态已提交,再触发过渡动画
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("show")));
+  setTimeout(() => hkDismiss(el), HK_HOLD_MS);
+}
+
+function hkStart() {
+  if (hkTimer) return;
+  hkPrefetch(); hkPrefetch(); hkPrefetch();
+  setTimeout(hkShow, 2600);   // 首条稍等页面稳定后再出现
+  hkTimer = setInterval(hkShow, HK_HOLD_MS + HK_GAP_MS);
+}
+
 $("#langToggle").addEventListener("click", () => {
   setLang(lang === "zh" ? "en" : "zh");
 });
@@ -3306,6 +3427,7 @@ $("#langToggle").addEventListener("click", () => {
   renderAdminUi();
   await load();
   startPolling();
+  hkStart();
 })();
 </script>
 <!-- 动态背景:与参考项目完全一致的接线方式 ——
