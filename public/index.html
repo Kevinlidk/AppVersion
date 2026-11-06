@@ -1409,6 +1409,30 @@ let isAdmin = false;
 let authConfigured = false;
 
 const normV = (v) => String(v || "").trim().replace(/^v/i, "");
+/**
+ * 比较两个版本号:>0 表示 a 更新,<0 表示 b 更新,0 表示相同。
+ * 数字段按数值比较;段数不同时长的更新(1.2 < 1.2.1);
+ * 同位置数字段优先于字符串段(1.0.0 > 1.0.0-beta)。
+ * 与 Worker 端 compareVersions 保持同一套规则。
+ */
+function cmpV(a, b) {
+  const pa = normV(a).split(/[.\-+]/);
+  const pb = normV(b).split(/[.\-+]/);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const xs = pa[i], ys = pb[i];
+    if (xs === undefined) return -1;
+    if (ys === undefined) return 1;
+    const x = /^\d+$/.test(xs) ? Number(xs) : xs;
+    const y = /^\d+$/.test(ys) ? Number(ys) : ys;
+    if (x === y) continue;
+    if (typeof x === "number" && typeof y === "number") return x < y ? -1 : 1;
+    if (typeof x === "number") return 1;
+    if (typeof y === "number") return -1;
+    return String(x) < String(y) ? -1 : 1;
+  }
+  return 0;
+}
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
 ));
@@ -1520,7 +1544,9 @@ function renderAdminUi() {
 function statusOf(a) {
   if (a.channel === "manual" || !a.latestVersion) return "none";
   if (!a.version) return "fresh";
-  return normV(a.latestVersion) === normV(a.version) ? "ok" : "update";
+  // 只有「最新 > 当前」才算有新版本;当前版本更高(手动填了更新的版本号,
+  // 或上游回退了 release)一律视为已是最新,避免误报。
+  return cmpV(a.latestVersion, a.version) > 0 ? "update" : "ok";
 }
 
 function badgeOf(a) {

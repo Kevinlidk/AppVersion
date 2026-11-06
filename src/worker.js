@@ -116,8 +116,9 @@ function normVersion(v) {
 
 /** 比较版本号:数字段按数值比较且高于字符串段(正式版优先于预发布后缀) */
 function compareVersions(a, b) {
-  const pa = String(a).split(/[.\-+]/);
-  const pb = String(b).split(/[.\-+]/);
+  // 先归一化(去掉 v 前缀),否则 "v2.0.0" 的首段会与 "2" 类型不一致导致误判
+  const pa = normVersion(a).split(/[.\-+]/);
+  const pb = normVersion(b).split(/[.\-+]/);
   const len = Math.max(pa.length, pb.length);
   for (let i = 0; i < len; i++) {
     const xs = pa[i], ys = pb[i];
@@ -1364,7 +1365,9 @@ async function runUpdateCheck(env) {
       if (
         latest.version &&
         latest.version !== app.notifiedVersion &&
-        (!app.version || normVersion(latest.version) !== normVersion(app.version))
+        // 仅当最新版本严格高于当前版本才算有更新:当前版本更高时
+        // (手动填了新版本 / 上游回退 release)不推送,避免误报
+        (!app.version || compareVersions(latest.version, app.version) > 0)
       ) {
         found.push({ app, version: latest.version });
       }

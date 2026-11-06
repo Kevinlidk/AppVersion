@@ -1238,6 +1238,29 @@ await test("scheduled:发现新版本聚合推送,notifiedVersion 防重复,noti
   assertEq(hookCalls.length, 1, "去重后推送次数");
 });
 
+await test("scheduled:当前版本高于最新版本时不推送(视为已是最新)", async () => {
+  const env4 = { APP_KV: makeKV(), CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook", ADMIN_PASSWORD: "p4" };
+  hookCalls.length = 0;
+  const { cookie: ck4 } = await loginAs(env4, "p4");
+  const call4 = (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}) };
+    headers.cookie = "av_session=" + ck4;
+    return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), env4, ctx);
+  };
+  // 上游 release 是 v2.0.0,但本地记录的当前版本更新(3.0.0)→ 不应推送
+  const a = await bodyOf(await call4("/api/apps", post({ name: "超前应用", channel: "github", repo: "foo/bar", version: "3.0.0", notify: true })));
+  await runScheduled(env4);
+  assertEq(hookCalls.length, 0, "当前版本更高时不推送");
+  const saved = (await bodyOf(await call4("/api/apps"))).find((x) => x.id === a.id);
+  assertEq(saved.latestVersion, "2.0.0", "latestVersion 仍按上游更新");
+  if (saved.notifiedVersion) throw new Error("未推送不应记录 notifiedVersion");
+
+  // 反向确认:当前版本更低时仍会推送
+  await call4("/api/apps/" + a.id, put({ version: "1.0.0" }));
+  await runScheduled(env4);
+  assertEq(hookCalls.length, 1, "当前版本更低时正常推送");
+});
+
 await test("scheduled:全部渠道发送失败时回滚标记,下次重试", async () => {
   const env3 = { APP_KV: makeKV(), CHECK_GAP_MS: "1", NOTIFY_WEBHOOK_URL: "https://notify.example/hook", ADMIN_PASSWORD: "p3" };
   hookCalls.length = 0;
