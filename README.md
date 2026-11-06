@@ -404,4 +404,58 @@ npm test         # API + 定时推送冒烟测试(离线,71 项)
 
 ## 许可
 
-本项目仅供学习与交流使用。
+本项目基于 [MIT License](LICENSE) 开源,Copyright (c) 2026 [Kevinlidk](https://github.com/Kevinlidk)。
+
+## 💖 鸣谢
+
+本项目得以成型,离不开这些优秀的开源项目与公共服务:
+
+### 运行依赖
+
+| 项目 | 用途 | 许可 |
+| --- | --- | --- |
+| [Cloudflare Workers](https://workers.cloudflare.com/) + [KV](https://developers.cloudflare.com/kv/) | 运行时与数据存储(全部后端逻辑运行于此) | 平台服务条款 |
+| [wrangler](https://github.com/cloudflare/workers-sdk) | 本地开发与部署工具链 | MIT / Apache-2.0 |
+| [GlyphWind](public/background/) | 全屏 WebGL2 动态字符背景引擎(内置复用套件) | MIT |
+
+### 桌面版打包
+
+| 项目 | 用途 | 许可 |
+| --- | --- | --- |
+| [Pake](https://github.com/tw93/Pake) | 把网页打包为 Windows / macOS / Linux 原生应用 | MIT |
+| [Tauri](https://github.com/tauri-apps/tauri) | Pake 底层的跨平台桌面运行时 | MIT / Apache-2.0 |
+| [GitHub Actions](https://github.com/features/actions) | 三平台在线构建与自动发布 Releases | 平台服务条款 |
+
+### 版本数据源
+
+| 项目 | 用途 |
+| --- | --- |
+| [GitHub Releases API](https://docs.github.com/rest/releases) | GitHub 渠道的版本与资产查询(含 `digest` 校验值) |
+| [winget-pkgs](https://github.com/microsoft/winget-pkgs) | winget 渠道的清单仓库(版本目录 + `installer.yaml` 下载地址与校验值) |
+| [Chocolatey Community Repository](https://community.chocolatey.org/) | Chocolatey 渠道的包版本查询 |
+| 各厂商公开 API | 官方自查渠道(如 Chrome 版本 API、.NET `release-metadata`) |
+
+### 图标与内容
+
+| 项目 | 用途 | 说明 |
+| --- | --- | --- |
+| [Iconify](https://iconify.design/) | 图标检索与托管 API | 按名称级联匹配 `selfhst` / `logos` / `thesvg-color` / `cib` 图标集,各图标集版权归其原作者所有 |
+| [icon-sets.iconify.design](https://icon-sets.iconify.design/) | 图标在线检索入口 | 应用表单中的快捷链接 |
+| [yesicon.app](https://yesicon.app/) | 图标在线检索入口 | 应用表单中的快捷链接 |
+| [一言 Hitokoto](https://hitokoto.cn/) | 右下角句子气泡内容 | 句子版权归各原作者;接口由 [v1.hitokoto.cn](https://v1.hitokoto.cn) 提供 |
+
+### 设计与灵感
+
+| 项目 | 说明 |
+| --- | --- |
+| [Uptime Kuma](https://github.com/louislam/uptime-kuma) | 分组、自由拖拽排序与折叠展开的交互设计参考(无代码复用) |
+| [selfh.st](https://selfh.st/icons/) | 自托管应用图标集的整理与维护 |
+
+### 特别感谢
+
+- 所有为上述开源项目与公共 API 贡献代码、数据与维护的开发者
+- [hitokoto](https://hitokoto.cn/) 社区中贡献与审校句子的每一位作者
+- 使用本项目并提供反馈的每一位使用者
+
+> 若你是上述某个项目的作者,认为本项目中的使用方式需要调整,欢迎通过 [Issues](https://github.com/Kevinlidk/AppVersion/issues) 联系。
+
