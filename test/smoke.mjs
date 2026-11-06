@@ -1076,7 +1076,7 @@ await test("winget 刷新:从 installer.yaml 解析各架构下载地址", async
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 
-await test("downloads 校验值:仅保留合法的 sha256(64位hex转小写)与 ProductCode", async () => {
+await test("downloads 校验值:仅保留合法的 sha256(64位hex转小写)与 GUID 形态 ProductCode", async () => {
   const a = await bodyOf(await call("/api/apps", post({
     name: "校验值应用", channel: "manual",
     downloadUrl: "https://e.com/a.exe",
@@ -1084,19 +1084,28 @@ await test("downloads 校验值:仅保留合法的 sha256(64位hex转小写)与 
       {
         name: "a.exe", url: "https://e.com/a.exe", score: 10,
         sha256: "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-        productCode: "{D2BF-44D2-A9E3}",
+        productCode: "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}",
       },
       {
         name: "b.msi", url: "https://e.com/b.msi", score: 9,
         sha256: "not-a-hash", productCode: "非法值 带空格",
       },
+      {
+        // Tencent 系清单:ProductCode 是卸载注册表键名而非 GUID,
+        // 应剔除 ProductCode、保留 sha256(前端才会显示哈希)
+        name: "c.exe", url: "https://e.com/c.exe", score: 8,
+        sha256: "FCE15D1659D2FF4E1FBC3ABE8704160D3E9376B88EF2E832961F8274BEC4406C",
+        productCode: "WeChat",
+      },
     ],
   })));
-  assertEq(a.downloads.length, 2, "两个候选");
+  assertEq(a.downloads.length, 3, "三个候选");
   assertEq(a.downloads[0].sha256, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "大写 hex 转小写保留");
-  assertEq(a.downloads[0].productCode, "{D2BF-44D2-A9E3}", "合法 ProductCode 保留");
+  assertEq(a.downloads[0].productCode, "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}", "GUID 形态 ProductCode 保留");
   if (a.downloads[1].sha256) throw new Error("非法 sha256 未被剔除");
   if (a.downloads[1].productCode) throw new Error("非法 ProductCode 未被剔除");
+  assertEq(a.downloads[2].productCode, undefined, "非 GUID ProductCode(WeChat)被剔除");
+  assertEq(a.downloads[2].sha256, "fce15d1659d2ff4e1fbc3abe8704160d3e9376b88ef2e832961f8274bec4406c", "WeChat 场景回退保留 sha256");
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 

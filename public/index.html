@@ -1909,11 +1909,15 @@ function downloadBtnHtml(a) {
     `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
     `<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 
-  // 校验值行:ProductCode 优先于 SHA-256(两者都有时只显示 ProductCode)
+  // 校验值行:ProductCode 优先于 SHA-256(两者都有时只显示 ProductCode)。
+  // ProductCode 仅在 GUID 形态时展示 —— 历史数据里可能存有 "WeChat"/"TIM"
+  // 这类卸载键名(非 GUID),此时回退到 SHA-256。
+  const PRODUCT_CODE_RE = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i;
   const codeRowHtml = (it) => {
-    const val = it.productCode || it.sha256 || "";
+    const pc = PRODUCT_CODE_RE.test(it.productCode || "") ? it.productCode : "";
+    const val = pc || it.sha256 || "";
     if (!val) return "";
-    const label = it.productCode ? "ProductCode" : "SHA-256";
+    const label = pc ? "ProductCode" : "SHA-256";
     return `<div class="dl-code" title="${label}:${esc(val)}"><code>${esc(val)}</code>` +
       `<button type="button" class="dl-copy" data-copy="${esc(val)}" title="${esc(t("code_copy", { l: label }))}" ` +
       `aria-label="${esc(t("code_copy", { l: label }))}">${copySvg}</button></div>`;

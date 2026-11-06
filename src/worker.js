@@ -1010,10 +1010,15 @@ function normalizeSha256(v) {
   return /^[0-9a-f]{64}$/.test(s) ? s : "";
 }
 
-/** ProductCode 规范化:GUID 或字母数字/花括号组合,限 128 字符;不合法返回空串 */
+/**
+ * ProductCode 规范化:仅接受 GUID 形态
+ *   {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}(花括号可省略,大小写不限)
+ * 否则返回空串。清单里还存在 "WeChat"/"TIM" 这类**卸载注册表键名**,
+ * 它们不是 GUID,对用户毫无意义 —— 此时应改显 SHA-256。
+ */
 function normalizeProductCode(v) {
   const s = String(v ?? "").trim();
-  return s && s.length <= 128 && /^[0-9a-zA-Z{}._-]+$/.test(s) ? s : "";
+  return /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i.test(s) ? s : "";
 }
 
 function parseWingetInstallerYaml(text) {
