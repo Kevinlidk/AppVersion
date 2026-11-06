@@ -1074,8 +1074,6 @@ const I18N = {
     src_official: "官方自查",
     src_manual: "手动维护",
     kind_file: "文件",
-    scope_user: "用户级",
-    scope_machine: "全局",
     copied: "已复制到剪贴板",
     copy_fail: "复制失败,请手动选择复制",
     dl_title: "下载最新版本:{u}",
@@ -1308,8 +1306,6 @@ const I18N = {
     src_official: "Custom API",
     src_manual: "Manual",
     kind_file: "File",
-    scope_user: "User",
-    scope_machine: "Machine",
     copied: "Copied to clipboard",
     copy_fail: "Copy failed — please copy it manually",
     dl_title: "Download latest: {u}",
@@ -1864,14 +1860,6 @@ function kindLabel(item) {
   return k === "appimage" ? "AppImage" : k.toUpperCase();
 }
 
-/** 安装范围标签:winget 清单的 Scope 值 → 简短展示文案 */
-function scopeLabel(scope) {
-  const v = String(scope || "").toLowerCase();
-  if (v === "user") return t("scope_user");
-  if (v === "machine") return t("scope_machine");
-  return scope;
-}
-
 /** 复制下载候选的校验值;clipboard API 不可用时(非安全上下文)降级 execCommand */
 async function copyDlValue(text) {
   try {
@@ -1935,7 +1923,8 @@ function downloadBtnHtml(a) {
     const kind = kindLabel(it);
     const arch = it.arch ? `<span class="dl-arch">${esc(it.arch)}</span>` : "";
     // 安装范围:user(仅当前用户)/ machine(全机安装)
-    const scope = it.scope ? `<span class="dl-scope">${esc(scopeLabel(it.scope))}</span>` : "";
+    // 安装范围:直接显示清单里的 Scope 原值(user / machine / 未来新增值),不做翻译
+    const scope = it.scope ? `<span class="dl-scope">${esc(it.scope)}</span>` : "";
     return `<div class="dl-item${i === 0 ? " best" : ""}">` +
       `<a class="dl-main" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" download title="${esc(it.url)}">` +
       `<span class="dl-kind">${esc(kind)}</span>${arch}${scope}` +
