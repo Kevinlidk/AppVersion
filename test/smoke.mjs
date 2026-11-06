@@ -154,6 +154,7 @@ globalThis.fetch = async (input, init) => {
       "    InstallerSha256: 1111111111111111111111111111111111111111111111111111111111111111",
       "  - Architecture: x64",
       "    InstallerUrl: https://dl.example.com/vlc-win64.exe",
+      "    Scope: user",
       "    InstallerSha256: 2222222222222222222222222222222222222222222222222222222222222222",
       "    ProductCode: {A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}",
       "  - Architecture: arm64",
@@ -1068,6 +1069,8 @@ await test("winget 刷新:从 installer.yaml 解析各架构下载地址", async
   if (x86.productCode) throw new Error("x86 不应有 ProductCode");
   const arm = app.downloads.find((d) => d.arch === "arm");
   if (arm.sha256 || arm.productCode) throw new Error("arm64 不应有校验值");
+  // 安装范围(user/machine)应从 installer.yaml 透传到下载候选
+  assertEq(app.downloads[0].scope, "user", "x64 的 Scope 透传");
   // downloadUrl 应被自动写为候选首选
   assertEq(app.downloadUrl, app.downloads[0].url, "downloadUrl 同步为首选");
   await call("/api/apps/" + a.id, { method: "DELETE" });

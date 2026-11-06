@@ -369,6 +369,8 @@ function normalizeDownloadList(raw) {
       score: Number.isFinite(score) ? score : 0,
       kind: String(item.kind ?? "").slice(0, 12),
       arch: String(item.arch ?? "").slice(0, 12),
+      // 安装范围(user / machine):winget 清单里同一安装包常按范围区分
+      scope: String(item.scope ?? "").slice(0, 16).toLowerCase(),
     };
     // winget 清单附带的校验值(可选):SHA-256 / ProductCode
     const sha = normalizeSha256(item.sha256);
@@ -1125,6 +1127,7 @@ async function fetchWingetInstallers(packageId, versionPath, env) {
         score: archScore(it.arch) + kindScore(kind),
         kind,
         arch: it.arch === "arm64" ? "arm" : it.arch,
+        scope: it.scope || "",
         sha256: it.sha256 || "",
         productCode: it.productCode || "",
       };
