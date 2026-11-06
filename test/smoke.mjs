@@ -10,6 +10,7 @@ import worker from "../src/worker.js";
 /* ── mock 外部 API ── */
 let ghMode = "ok"; // ok | notfound | ratelimited
 let chocoMode = "ok"; // ok | notfound | blocked | odataonly
+let ciscoMode = "ok"; // ok | blocked | garbage
 let wingetMode = "ok"; // ok | notfound
 const hookCalls = [];
 
@@ -82,6 +83,22 @@ globalThis.fetch = async (input, init) => {
       "ManifestType: installer",
     ].join("\n");
     return new Response(yaml, { status: 200, headers: { "content-type": "text/plain" } });
+  }
+  // Cisco Release Notes:模拟含多个版本 + 一个模块版本(不应被选中)
+  if (u.includes("release-notes-cisco-secure-client-5-1.html")) {
+    if (ciscoMode === "blocked") return new Response("Forbidden", { status: 403 });
+    if (ciscoMode === "garbage") return new Response("<html><body>no versions here</body></html>", { status: 200 });
+    const html = [
+      "<html><body>",
+      "<h3>Cisco Secure Client 5.1.20.333 New Features</h3>",
+      "<h3>Cisco Secure Client 5.1.19.1862 New Features</h3>",
+      "<h3>Cisco Secure Client 5.1.18.314 New Features</h3>",
+      "<p>Zero Trust Access—5.1.20.7023</p>",
+      "<p>Cisco Secure Client 5.1.9.113 New Features</p>",
+      "<p>Cisco Secure Client 5.1.20.333</p>",
+      "</body></html>",
+    ].join("\n");
+    return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
   }
   if (u.startsWith("https://community.chocolatey.org/api/v2/package/")) {
     if (chocoMode === "blocked") {
@@ -800,6 +817,44 @@ await test("diagnostics:未配置 GITHUB_TOKEN 时给出告警", async () => {
   if (!d.hints.some((h) => h.level === "warn" && /GITHUB_TOKEN/.test(h.text))) {
     throw new Error("缺少 GITHUB_TOKEN 告警");
   }
+});
+
+/* ── Cisco Secure Client 专属渠道 ── */
+
+await test("cisco 渠道:从 Release Notes 提取最高版本,忽略模块版本", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "Cisco Secure Client", channel: "cisco",
+  })));
+  assertEq(a.channel, "cisco", "渠道");
+  assertEq(a.repo, "", "无需 repo");
+  assertEq(a.packageId, "", "无需 packageId");
+  assertEq(a.officialUrl, "", "无需 officialUrl");
+
+  const res = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "刷新状态码");
+  const app = await bodyOf(res);
+  // 5.1.20.333 是最高;5.1.20.7023 属于模块版本,不应被选中
+  assertEq(app.latestVersion, "5.1.20.333", "取最高客户端版本");
+  if (!app.releaseUrl.includes("release-notes-cisco-secure-client")) throw new Error("来源应指向 Release Notes");
+  if (!app.lastCheckedAt) throw new Error("缺少 lastCheckedAt");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("cisco 渠道:页面结构异常时给出明确错误", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "Cisco 异常", channel: "cisco",
+  })));
+  ciscoMode = "garbage";
+  const bad = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(bad.status, 502, "解析失败状态码");
+  const msg = (await bodyOf(bad)).error || "";
+  if (!msg.includes("未能从 Cisco Release Notes 中解析出版本号")) throw new Error("错误信息不明确:" + msg);
+
+  ciscoMode = "blocked";
+  const blocked = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(blocked.status, 403, "403 透传");
+  ciscoMode = "ok";
+  await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 
 /* ── winget installer.yaml → 下载候选 ── */

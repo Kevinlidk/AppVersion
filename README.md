@@ -12,6 +12,7 @@
   - **Chocolatey 社区源**:优先读 `/api/v2/package/{id}` 的 302 重定向(约 165 字节,从 nupkg 文件名取版本),失败时回退 OData 查询
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
   - **官方自查(自定义 API)**:填入厂商公开的版本 API 地址 + 版本字段路径,直接读取最新版本号。适用于 Chrome、.NET 这类提供结构化版本数据但没有标准 Release 接口的应用
+  - **Cisco Secure Client(专属渠道)**:**无需填写任何字段**,固定抓取 Cisco 官方 [Release Notes](https://www.cisco.com/c/en/us/td/docs/security/vpn_client/anyconnect/Cisco-Secure-Client-5/release/notes/release-notes-cisco-secure-client-5-1.html),从 `Cisco Secure Client <a.b.c.d>` 文本中提取全部客户端版本并取最高值(页面里还有 `Zero Trust Access—5.1.20.7023` 这类模块版本,因缺少完整前缀会被自动排除)。页面结构变化或站点返回 403 时会给出明确错误提示
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
   - **⇄ Chocolatey → winget 一键转换**:Chocolatey 应用卡片上提供转换按钮。若 Chocolatey 被 Cloudflare WAF 拦截(见下方说明),可一键改用它对应的 winget 包
     - 自动在 `microsoft/winget-pkgs` 中搜索候选(应用名 / 包 ID 代码搜索 + 由官网域名推导的启发式 ID)
@@ -306,7 +307,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,71 项)
+npm test         # API + 定时推送冒烟测试(离线,73 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:

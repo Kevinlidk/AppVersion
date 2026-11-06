@@ -478,8 +478,8 @@ function normalizeApp(input, base = {}) {
   if (name.length > 100) throw new ApiError("应用名称不能超过 100 个字符");
 
   const channel = input.channel ?? out.channel ?? "manual";
-  if (!["github", "chocolatey", "winget", "official", "manual"].includes(channel)) {
-    throw new ApiError("版本来源仅支持 github / chocolatey / winget / official / manual");
+  if (!["github", "chocolatey", "winget", "official", "cisco", "manual"].includes(channel)) {
+    throw new ApiError("版本来源仅支持 github / chocolatey / winget / official / cisco / manual");
   }
 
   let repo = String(input.repo ?? out.repo ?? "").trim();
@@ -518,6 +518,12 @@ function normalizeApp(input, base = {}) {
     jsonPath = validateJsonPath(jsonPath);
     repo = "";
     packageId = "";
+  } else if (channel === "cisco") {
+    // Cisco 专属渠道:固定抓取官方 Release Notes,无需用户填写任何字段
+    repo = "";
+    packageId = "";
+    officialUrl = "";
+    jsonPath = "";
   } else {
     repo = "";
     packageId = "";
@@ -1125,6 +1131,54 @@ async function fetchWingetLatest(packageId, env) {
   };
 }
 
+/* ── Cisco Secure Client 专属渠道 ────────────────────────────
+   官方没有版本 JSON API,只能从 Release Notes 页面里提取。
+   版本号固定出现在「Cisco Secure Client <a.b.c.d>」这样的文本中
+   (小节标题/正文都适用);同一页面还会出现模块版本(如
+   「Zero Trust Access—5.1.20.7023」),因此必须依赖完整前缀,
+   不能做通用版本号匹配。取所有命中里的最大值即为最新客户端版本。 */
+const CISCO_RELEASE_NOTES_URL =
+  "https://www.cisco.com/c/en/us/td/docs/security/vpn_client/anyconnect/Cisco-Secure-Client-5/release/notes/release-notes-cisco-secure-client-5-1.html";
+const CISCO_MAX_BYTES = 8 * 1024 * 1024;
+const CISCO_HEADERS = {
+  // 官方文档站对非浏览器 UA 较敏感,带上常见 Accept 头更稳
+  "user-agent": "Mozilla/5.0 (compatible; app-version-worker/1.2; +https://github.com/Kevinlidk/AppVersion)",
+  accept: "text/html,application/xhtml+xml",
+  "accept-language": "en-US,en;q=0.9",
+};
+
+async function fetchCiscoLatest() {
+  let res;
+  try {
+    res = await fetchWithRetry(CISCO_RELEASE_NOTES_URL, { headers: CISCO_HEADERS });
+  } catch (e) {
+    throw new ApiError(`Cisco Release Notes 请求失败:${(e && e.message) || e}`, 502);
+  }
+  if (res.status === 403) {
+    throw new ApiError("Cisco 文档站拒绝访问(HTTP 403),可能对云端 IP 限流,请稍后重试", 403);
+  }
+  if (!res.ok) throw new ApiError(`Cisco Release Notes 请求失败(HTTP ${res.status})`, 502);
+
+  const len = Number(res.headers.get("content-length") || 0);
+  if (len > CISCO_MAX_BYTES) throw new ApiError("Cisco Release Notes 响应过大,超出解析上限", 502);
+  const html = await res.text();
+  if (html.length > CISCO_MAX_BYTES) throw new ApiError("Cisco Release Notes 响应过大,超出解析上限", 502);
+
+  const versions = [...new Set(
+    [...html.matchAll(/Cisco Secure Client\s+(\d+\.\d+\.\d+\.\d+)/g)].map((m) => m[1])
+  )];
+  if (!versions.length) {
+    throw new ApiError("未能从 Cisco Release Notes 中解析出版本号,页面结构可能已变化", 502);
+  }
+  versions.sort(compareVersions);
+  return {
+    version: versions[versions.length - 1],
+    // 来源链接固定指向 Release Notes(所有版本详情)
+    releaseUrl: CISCO_RELEASE_NOTES_URL,
+    publishedAt: null,
+  };
+}
+
 /**
  * 官方自查:直接请求厂商公开的版本 API/JSON,按字段路径取值。
  * 适用于 Chrome(Google 版本发布 API)、.NET(release-metadata)等
@@ -1254,6 +1308,7 @@ async function fetchLatest(app, env) {
   if (app.channel === "chocolatey" && app.packageId) return fetchChocolateyLatest(app.packageId);
   if (app.channel === "winget" && app.packageId) return fetchWingetLatest(app.packageId, env);
   if (app.channel === "official") return fetchOfficialLatest(app);
+  if (app.channel === "cisco") return fetchCiscoLatest();
   throw new ApiError("手动维护的应用不支持自动查询,请在编辑中更新版本号");
 }
 
@@ -1815,6 +1870,11 @@ async function handleApi(request, env, pathname) {
       out.appUrl = `${CHOCO_HOST}/packages/${encodeURIComponent(draft.packageId)}`;
       out.downloadUrl = out.appUrl;
       out.source = "chocolatey";
+    } else if (draft.channel === "cisco") {
+      // 官网指向 Cisco Secure Client 产品支持页,下载地址即官方 Release Notes
+      out.appUrl = "https://www.cisco.com/c/en/us/support/security/secure-client/model.html";
+      out.downloadUrl = CISCO_RELEASE_NOTES_URL;
+      out.source = "cisco";
     } else if (draft.channel === "official" && draft.officialUrl) {
       // 官方自查:用 API 域名作官网,下载地址留空交给用户填写
       try { out.appUrl = "https://" + new URL(draft.officialUrl).hostname; } catch { /* 忽略 */ }

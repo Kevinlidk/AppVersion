@@ -99,6 +99,15 @@ globalThis.fetch = async (input, init) => {
       { status: 200, headers: { "content-type": "application/json" } }
     );
   }
+  // Cisco Release Notes 演示数据(含模块版本,验证只取客户端版本)
+  if (u.includes("release-notes-cisco-secure-client-5-1.html")) {
+    const html = [
+      "<html><body><h3>Cisco Secure Client 5.1.20.333 New Features</h3>",
+      "<h3>Cisco Secure Client 5.1.19.1862 New Features</h3>",
+      "<p>Zero Trust Access—5.1.20.7023</p></body></html>",
+    ].join("\n");
+    return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+  }
   if (u.startsWith("https://community.chocolatey.org/")) {
     return new Response(
       '<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom">' +
