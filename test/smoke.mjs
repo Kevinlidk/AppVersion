@@ -61,11 +61,54 @@ globalThis.fetch = async (input, init) => {
     if (wingetMode === "notfound") {
       return new Response(JSON.stringify({ message: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } });
     }
+    // 嵌套分组目录:包目录里有一级「2020」,真实版本在其下(Adobe.Acrobat.Pro 结构)
+    if (u.includes("/Adobe/Acrobat/Pro")) {
+      if (u.endsWith("/Adobe/Acrobat/Pro")) {
+        return new Response(JSON.stringify([
+          { name: "2020", type: "dir" },
+          { name: "26.002.21901", type: "dir" },
+          { name: "26.002.22031", type: "dir" },
+        ]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (u.endsWith("/Adobe/Acrobat/Pro/2020")) {
+        return new Response(JSON.stringify([
+          { name: "20.001.30002", type: "dir" },
+        ]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    }
     return new Response(JSON.stringify(wingetEntries), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  // 版本目录最后一次提交时间(用于「按 last commit date 判定最新」)
+  if (u.startsWith("https://api.github.com/repos/microsoft/winget-pkgs/commits?path=")) {
+    const path = decodeURIComponent((u.match(/path=([^&]+)/) || [])[1] || "");
+    // 2020/20.001.30002 是很久以前的提交;26.002.22031 最近提交
+    const date = path.includes("2020/") || path.endsWith("/2020")
+      ? "2021-03-01T00:00:00Z"
+      : path.includes("26.002.22031")
+        ? "2026-10-14T16:04:17Z"
+        : path.includes("26.002.21901")
+          ? "2026-08-01T00:00:00Z"
+          : "2026-01-01T00:00:00Z";
+    return new Response(JSON.stringify([{ commit: { committer: { date }, message: "New version" } }]),
+      { status: 200, headers: { "content-type": "application/json" } });
   }
   // installer.yaml:模拟 winget 清单(含 x64/arm/x86 三种架构与 exe/msi 两种类型)
   if (u.startsWith("https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/")) {
     if (wingetMode === "notfound") return new Response("Not Found", { status: 404 });
+    if (u.includes("/Adobe/Acrobat/Pro/")) {
+      const yaml = [
+        "PackageIdentifier: Adobe.Acrobat.Pro",
+        "PackageVersion: 26.002.22031",
+        "InstallerType: exe",
+        "Installers:",
+        "  - Architecture: x64",
+        "    InstallerUrl: https://dl.example.com/Acrobat-x64.exe",
+        "    InstallerSha256: " + "a".repeat(64),
+        "ManifestType: installer",
+      ].join("\n");
+      return new Response(yaml, { status: 200, headers: { "content-type": "text/plain" } });
+    }
     const yaml = [
       "PackageIdentifier: VideoLAN.VLC",
       "PackageVersion: 9.10.0",
@@ -856,6 +899,22 @@ await test("cisco 渠道:页面结构异常时给出明确错误", async () => {
   const blocked = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
   assertEq(blocked.status, 403, "403 透传");
   ciscoMode = "ok";
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+/* ── winget：嵌套分组目录 + last commit date ── */
+
+await test("winget:分组目录(2020/)下的真实版本被正确展开", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "Adobe Acrobat Pro", channel: "winget", packageId: "Adobe.Acrobat.Pro",
+  })));
+  const res = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "刷新成功");
+  const app = await bodyOf(res);
+  // 旧实现会把一级目录「2020」当版本号(2020 > 26),必须避免
+  assertEq(app.latestVersion, "26.002.22031", "不应把年份目录当成版本");
+  assertEq(app.publishedAt, "2026-10-14T16:04:17Z", "带上该版本的提交时间");
+  if (!app.downloads.length) throw new Error("嵌套版本的 installer.yaml 未解析出下载地址");
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 

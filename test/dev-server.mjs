@@ -47,6 +47,13 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input && input.url;
   const u = url || "";
+  // 版本目录的 last commit date(演示用固定日期)
+  if (u.startsWith("https://api.github.com/repos/microsoft/winget-pkgs/commits?path=")) {
+    const path = decodeURIComponent((u.match(/path=([^&]+)/) || [])[1] || "");
+    const date = path.includes("9.9.9") ? "2026-10-14T16:04:17Z" : "2026-01-01T00:00:00Z";
+    return new Response(JSON.stringify([{ commit: { committer: { date }, message: "New version" } }]),
+      { status: 200, headers: { "content-type": "application/json" } });
+  }
   if (u.startsWith("https://api.github.com/repos/microsoft/winget-pkgs/contents/")) {
     return new Response(
       JSON.stringify([

@@ -1095,11 +1095,12 @@ function wingetTypeToKind(type, url) {
  * 取某个 winget 包在指定版本下的安装包列表(读 installer.yaml)。
  * 路径:manifests/<首字母>/<发布者>/<其余段…>/<版本>/<PackageId>.installer.yaml
  */
-async function fetchWingetInstallers(packageId, version, env) {
-  if (!packageId || !version) return [];
+async function fetchWingetInstallers(packageId, versionPath, env) {
+  if (!packageId || !versionPath) return [];
   const parts = packageId.split(".");
   const dir = `manifests/${packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
-  const file = `${dir}/${version}/${packageId}.installer.yaml`;
+  // versionPath 可能含子目录(如 2020/20.001.30002),不能只当版本名用
+  const file = `${dir}/${versionPath}/${packageId}.installer.yaml`;
   const url = `https://raw.githubusercontent.com/microsoft/winget-pkgs/master/${file}`;
   let res;
   try {
@@ -1131,33 +1132,128 @@ async function fetchWingetInstallers(packageId, version, env) {
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
 
+/* ── winget 版本目录发现 ──────────────────────────────────────
+   清单仓库里并非所有一级目录都是版本号:有些包按年份分组,
+   例如 Adobe.Acrobat.Pro 下是 2020/20.001.30002 这样的嵌套结构。
+   旧实现直接拿一级目录名排序,会把「2020」当成版本号,因为
+   2020 > 26 而误判成最新(实际最新是 26.002.22031)。
+   现在:① 严格版本形态(含小数点)直接采用;② 其余目录尝试下钻一层,
+   子目录才是版本;③ 下钻后仍无版本则保留自身(单版本包的兜底)。 */
+const WINGET_VERSION_RE = /^\d+(?:\.\d+)+$/;
+
+async function ghContents(path, env) {
+  const res = await fetchWithRetry(
+    `https://api.github.com/repos/microsoft/winget-pkgs/contents/${path}`,
+    { headers: await ghHeaders(env) }
+  );
+  if (res.status === 403 || res.status === 429) throw githubThrottleError(res, env);
+  if (!res.ok) return null;
+  const body = await res.json();
+  return Array.isArray(body) ? body : null;
+}
+
+/** 列出包目录下的全部版本(含嵌套分组展开),返回 [{version, path}] */
+async function listWingetVersions(pkgDir, env) {
+  const entries = await ghContents(pkgDir, env);
+  if (!entries) throw new ApiError("winget 源中未找到该包,请检查包 ID", 404);
+
+  const dirs = entries.filter((e) => e && e.type === "dir").map((e) => e.name);
+  if (!dirs.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);
+
+  const out = [];
+  const nested = [];
+  for (const name of dirs) {
+    if (WINGET_VERSION_RE.test(name)) out.push({ version: name, path: name });
+    else nested.push(name);
+  }
+  // 非版本形态的目录:下钻一层找版本(限制数量,避免异常仓库产生大量请求)
+  for (const name of nested.slice(0, 5)) {
+    const children = await ghContents(`${pkgDir}/${name}`, env);
+    const childDirs = (children || [])
+      .filter((e) => e && e.type === "dir")
+      .map((e) => e.name);
+    const matched = childDirs.filter((c) => WINGET_VERSION_RE.test(c));
+    if (matched.length) {
+      for (const c of matched) out.push({ version: c, path: `${name}/${c}` });
+    } else {
+      // 下钻不到版本:把该目录本身当作版本(避免整包解析失败)
+      out.push({ version: name, path: name });
+    }
+  }
+  if (!out.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);
+  return out;
+}
+
+/** 取某个版本目录最后一次提交时间(winget-pkgs 每次发版都会提交) */
+async function wingetVersionCommitDate(pkgDir, versionPath, env) {
+  try {
+    const res = await fetchWithRetry(
+      `https://api.github.com/repos/microsoft/winget-pkgs/commits?path=${encodeURIComponent(
+        `${pkgDir}/${versionPath}`
+      )}&per_page=1`,
+      { headers: await ghHeaders(env) }
+    );
+    if (!res.ok) return null;
+    const arr = await res.json();
+    if (!Array.isArray(arr) || !arr.length) return null;
+    const c = arr[0];
+    return (c && c.commit && (c.commit.committer || c.commit.author) || {}).date || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 选出版本目录中的最新一条。
+ * 先按版本号降序取前若干候选,再**用 last commit date 判定**最新:
+ * 清单仓库每次发布新版本都会新增一次提交,日期比版本字符串更可靠
+ * (能兼容 2020 这类分组目录、以及版本号命名不规范的包)。
+ * 日期全部取不到时回退到版本号比较。返回 {version, path, publishedAt}。
+ */
+const WINGET_DATE_CANDIDATES = 5;
+
+async function pickWingetLatest(pkgDir, versions, env) {
+  const byVersion = [...versions].sort((a, b) => compareVersions(a.version, b.version));
+  const top = byVersion.slice(-WINGET_DATE_CANDIDATES);
+  if (top.length === 1) {
+    const only = top[0];
+    return { ...only, publishedAt: await wingetVersionCommitDate(pkgDir, only.path, env) };
+  }
+  const withDates = await Promise.all(
+    top.map(async (v) => ({
+      ...v,
+      publishedAt: await wingetVersionCommitDate(pkgDir, v.path, env),
+    }))
+  );
+  const dated = withDates.filter((v) => v.publishedAt);
+  if (dated.length) {
+    dated.sort((a, b) => {
+      const ta = Date.parse(a.publishedAt);
+      const tb = Date.parse(b.publishedAt);
+      if (ta !== tb) return tb - ta;                        // 提交时间新的优先
+      return compareVersions(b.version, a.version);          // 同时间按版本号兜底
+    });
+    return dated[0];
+  }
+  // 日期取不到(限流/无提交记录):回退到版本号最大的
+  return { ...byVersion[byVersion.length - 1], publishedAt: null };
+}
+
 async function fetchWingetLatest(packageId, env) {
   const parts = packageId.split(".");
   const dir = `manifests/${packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
-  const res = await fetchWithRetry(
-    `https://api.github.com/repos/microsoft/winget-pkgs/contents/${dir}`,
-    { headers: await ghHeaders(env) }
-  );
-  if (res.status === 404) throw new ApiError("winget 源中未找到该包,请检查包 ID", 404);
-  if (res.status === 403 || res.status === 429) throw githubThrottleError(res, env);
-  if (!res.ok) throw new ApiError(`winget 源查询失败(HTTP ${res.status})`, 502);
 
-  const entries = await res.json();
-  const versions = (Array.isArray(entries) ? entries : [])
-    .filter((e) => e && e.type === "dir")
-    .map((e) => e.name);
-  if (!versions.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);
-  const latest = versions.sort(compareVersions)[versions.length - 1];
+  const versions = await listWingetVersions(dir, env);
+  const latest = await pickWingetLatest(dir, versions, env);
 
   // 读取该版本的 installer.yaml,取出各架构下载地址作为下载候选
-  const downloads = await fetchWingetInstallers(packageId, latest, env);
-  const best = downloads.find((d) => d.url);
+  const downloads = await fetchWingetInstallers(packageId, latest.path, env);
 
   return {
-    version: latest,
-    // 指向该包在 winget-pkgs 中的版本目录页(所有版本详情)
+    version: latest.version,
+    // 指向该包的版本目录页(所有版本详情)
     releaseUrl: `https://github.com/microsoft/winget-pkgs/tree/master/${dir}`,
-    publishedAt: null,
+    publishedAt: latest.publishedAt || null,
     downloads,
   };
 }
