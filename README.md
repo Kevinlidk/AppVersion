@@ -404,7 +404,7 @@ npm test         # API + 定时推送冒烟测试(离线,80 项)
 }
 ```
 
-> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;校验值:winget 渠道的候选附带 `sha256` / `productCode`(来自该版本 `installer.yaml` 的 `InstallerSha256` / `ProductCode`),GitHub 渠道的候选附带 `sha256`(来自 GitHub 为资产计算的 `digest` 摘要),均仅保留合法值。下载菜单中每个候选会在文件名下方显示校验值——`ProductCode` 优先于 `SHA-256`,文本框右上角有复制按钮可一键复制完整值;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
+> 字段说明:`groupId` 为 `null` 表示未分组;`order` 是同组内显示顺序;`downloads` 为自动检测生成的候选安装包列表(按 `score` 降序),仅用于渲染下载菜单;校验值:winget 渠道的候选附带 `sha256` / `productCode`(来自该版本 `installer.yaml` 的 `InstallerSha256` / `ProductCode`),GitHub 渠道的候选附带 `sha256`(来自 GitHub 为资产计算的 `digest` 摘要),均仅保留合法值;`ProductCode` 必须是 **GUID 形态**(`{8-4-4-4-12}` 十六进制,花括号可省略),`WeChat`/`TIM` 这类卸载注册表键名会被剔除并改显 SHA-256。下载菜单中每个候选会在文件名下方显示校验值——`ProductCode` 优先于 `SHA-256`,文本框右上角有复制按钮可一键复制完整值;`linkName` 开启后卡片应用名可点击跳转 `appUrl`;`iconUrl` 留空则自动匹配图标。
 
 分组记录示例:
 
