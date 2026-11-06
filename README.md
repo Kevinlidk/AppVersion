@@ -11,7 +11,8 @@
   - **GitHub Releases**:自动拉取最新正式版,无 latest 时回退最近一条 Release;tag 常见的 `v` 前缀会被自动剥离(`v1.2.3` 存为 `1.2.3`),与手动填写的纯版本号保持一致
   - **Chocolatey 社区源**:优先读 `/api/v2/package/{id}` 的 302 重定向(约 165 字节,从 nupkg 文件名取版本),失败时回退 OData 查询
   - **winget 官方源**:查询 `microsoft/winget-pkgs` 清单仓库(即 winget 的官方数据源)
-    - **自动展开分组目录**:部分包按年份分组(如 `Adobe/Acrobat/Pro/2020/20.001.30002`),会下钻一层取真实版本目录,不会把 `2020` 误当版本号
+    - **正确区分分组目录与子包目录**:只把「版本形态」(如 `15.83.5`)的目录当版本——`Adobe/Acrobat/Pro/2020/…` 里的年份目录不会被当成版本号;`TeamViewer/TeamViewer/Host/` 这类**子包目录**(里面是另一个包 `TeamViewer.TeamViewer.Host` 的清单)也会被排除,避免误选后按本包 ID 找不到 `installer.yaml` 而使下载候选为空。若整包都按分组存放,才下钻一层兜底
+    - **解析兜底**:选中的版本路径若取不到本包的 `installer.yaml`,自动回退到版本号次高的候选
     - **按 last commit date 判定最新**:取版本号最高的前 5 个候选,逐一查询其目录的**最后一次提交时间**,以最新提交者为准(清单仓库每次发版都会提交,日期比版本字符串更可靠);日期取不到时回退到版本号比较。同时把该提交时间作为发布日期返回
   - **官方自查(自定义 API)**:填入厂商公开的版本 API 地址 + 版本字段路径,直接读取最新版本号。适用于 Chrome、.NET 这类提供结构化版本数据但没有标准 Release 接口的应用
   - **内置应用(官方自查预设)** —— 选中「官方自查(自定义 API)」后,面板顶部列出**内置应用**,点击即自动填好名称 / API 地址 / 字段路径(专用解析型还会锁定输入框),无需手查接口。当前内置:
@@ -315,7 +316,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,79 项)
+npm test         # API + 定时推送冒烟测试(离线,80 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:

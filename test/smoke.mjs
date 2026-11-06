@@ -62,6 +62,26 @@ globalThis.fetch = async (input, init) => {
       return new Response(JSON.stringify({ message: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } });
     }
     // 嵌套分组目录:包目录里有一级「2020」,真实版本在其下(Adobe.Acrobat.Pro 结构)
+    // 子包目录结构:版本目录与 Host/QuickSupport 子包混在同一层(TeamViewer)
+    if (u.includes("/TeamViewer/TeamViewer")) {
+      if (u.endsWith("/TeamViewer/TeamViewer")) {
+        return new Response(JSON.stringify([
+          { name: "15.82.6", type: "dir" },
+          { name: "15.83.5", type: "dir" },
+          { name: "Host", type: "dir" },
+          { name: "QuickSupport", type: "dir" },
+        ]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (u.endsWith("/TeamViewer/TeamViewer/Host")) {
+        return new Response(JSON.stringify([{ name: "15.83.5", type: "dir" }]),
+          { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (u.endsWith("/TeamViewer/TeamViewer/QuickSupport")) {
+        return new Response(JSON.stringify([{ name: "15.82.6", type: "dir" }]),
+          { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    }
     if (u.includes("/Adobe/Acrobat/Pro")) {
       if (u.endsWith("/Adobe/Acrobat/Pro")) {
         return new Response(JSON.stringify([
@@ -96,6 +116,21 @@ globalThis.fetch = async (input, init) => {
   // installer.yaml:模拟 winget 清单(含 x64/arm/x86 三种架构与 exe/msi 两种类型)
   if (u.startsWith("https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/")) {
     if (wingetMode === "notfound") return new Response("Not Found", { status: 404 });
+    // 子包目录下没有本包的 installer.yaml:Host/15.83.5 里只有 Host 包的清单
+    if (u.includes("/TeamViewer/TeamViewer/")) {
+      if (u.includes("/Host/") || u.includes("/QuickSupport/")) return new Response("Not Found", { status: 404 });
+      const yaml = [
+        "PackageIdentifier: TeamViewer.TeamViewer",
+        "PackageVersion: 15.83.5",
+        "InstallerType: exe",
+        "Installers:",
+        "  - Architecture: x64",
+        "    InstallerUrl: https://dl.example.com/TeamViewer_Setup_x64.exe",
+        "    InstallerSha256: " + "c".repeat(64),
+        "ManifestType: installer",
+      ].join("\n");
+      return new Response(yaml, { status: 200, headers: { "content-type": "text/plain" } });
+    }
     if (u.includes("/Adobe/Acrobat/Pro/")) {
       const yaml = [
         "PackageIdentifier: Adobe.Acrobat.Pro",
@@ -915,6 +950,21 @@ await test("winget:分组目录(2020/)下的真实版本被正确展开", async 
   assertEq(app.latestVersion, "26.002.22031", "不应把年份目录当成版本");
   assertEq(app.publishedAt, "2026-10-14T16:04:17Z", "带上该版本的提交时间");
   if (!app.downloads.length) throw new Error("嵌套版本的 installer.yaml 未解析出下载地址");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("winget:子包目录(Host/QuickSupport)不会被当成版本候选", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "TeamViewer full client", channel: "winget", packageId: "TeamViewer.TeamViewer",
+  })));
+  const res = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "刷新成功");
+  const app = await bodyOf(res);
+  assertEq(app.latestVersion, "15.83.5", "取真实版本目录,而非 Host 子包");
+  // 关键回归点:子包目录被排除后,下载候选必须还在
+  if (!app.downloads || !app.downloads.length) {
+    throw new Error("下载候选为空(子包目录被误选为版本)");
+  }
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 

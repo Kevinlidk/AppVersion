@@ -1152,7 +1152,20 @@ async function ghContents(path, env) {
   return Array.isArray(body) ? body : null;
 }
 
-/** 列出包目录下的全部版本(含嵌套分组展开),返回 [{version, path}] */
+/**
+ * 列出包目录下的全部版本,返回 [{version, path}]。
+ *
+ * 只把「版本形态」的目录名当版本。子目录可能有两种完全不同的含义:
+ *   1. 分组目录 —— 例如 Adobe/Acrobat/Pro/2020/20.001.30002,
+ *      真实版本在下一层,「2020」本身不是版本;
+ *   2. 子包目录 —— 例如 TeamViewer/TeamViewer/Host/15.83.5,
+ *      这里的 Host 是另一个包(TeamViewer.TeamViewer.Host)的路径段,
+ *      其下的 manifest 文件名与我们查询的包 ID 并不匹配。
+ * 旧实现把两者都当成候选版本下钻,导致 TeamViewer 选中了
+ * 「Host/15.83.5」,再按本包 ID 去找 installer.yaml 自然 404,
+ * 下载候选就全空了。因此:优先只取版本形态目录;
+ * 仅当一个都没有时(整包都按分组存放)才下钻,避免兼容性倒退。
+ */
 async function listWingetVersions(pkgDir, env) {
   const entries = await ghContents(pkgDir, env);
   if (!entries) throw new ApiError("winget 源中未找到该包,请检查包 ID", 404);
@@ -1160,14 +1173,12 @@ async function listWingetVersions(pkgDir, env) {
   const dirs = entries.filter((e) => e && e.type === "dir").map((e) => e.name);
   if (!dirs.length) throw new ApiError("winget 源中未找到该包的版本目录", 404);
 
+  const strict = dirs.filter((n) => WINGET_VERSION_RE.test(n));
+  if (strict.length) return strict.map((n) => ({ version: n, path: n }));
+
+  // 没有直接版本目录:下钻一层(限 5 个,避免异常仓库产生大量请求)
   const out = [];
-  const nested = [];
-  for (const name of dirs) {
-    if (WINGET_VERSION_RE.test(name)) out.push({ version: name, path: name });
-    else nested.push(name);
-  }
-  // 非版本形态的目录:下钻一层找版本(限制数量,避免异常仓库产生大量请求)
-  for (const name of nested.slice(0, 5)) {
+  for (const name of dirs.slice(0, 5)) {
     const children = await ghContents(`${pkgDir}/${name}`, env);
     const childDirs = (children || [])
       .filter((e) => e && e.type === "dir")
@@ -1176,7 +1187,6 @@ async function listWingetVersions(pkgDir, env) {
     if (matched.length) {
       for (const c of matched) out.push({ version: c, path: `${name}/${c}` });
     } else {
-      // 下钻不到版本:把该目录本身当作版本(避免整包解析失败)
       out.push({ version: name, path: name });
     }
   }
@@ -1246,8 +1256,20 @@ async function fetchWingetLatest(packageId, env) {
   const versions = await listWingetVersions(dir, env);
   const latest = await pickWingetLatest(dir, versions, env);
 
-  // 读取该版本的 installer.yaml,取出各架构下载地址作为下载候选
-  const downloads = await fetchWingetInstallers(packageId, latest.path, env);
+  // 读取该版本的 installer.yaml,取出各架构下载地址作为下载候选。
+  // 若该路径下没有本包的 installer.yaml(目录结构与预期不符),依次回退到
+  // 版本号次高的候选,避免「版本查到了但下载候选为空」。
+  let downloads = await fetchWingetInstallers(packageId, latest.path, env);
+  if (!downloads.length) {
+    const fallbacks = [...versions]
+      .filter((v) => v.path !== latest.path)
+      .sort((a, b) => compareVersions(b.version, a.version))
+      .slice(0, 2);
+    for (const v of fallbacks) {
+      downloads = await fetchWingetInstallers(packageId, v.path, env);
+      if (downloads.length) break;
+    }
+  }
 
   return {
     version: latest.version,
