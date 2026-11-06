@@ -1881,8 +1881,18 @@ function downloadBtnHtml(a) {
     `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
     `<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>`;
 
-  // 只有一个地址(手动填写或仅一个资产):保持直接下载
-  if (list.length < 2) {
+  // 文件形态判定:扩展名命中安装包,或候选自带 kind/校验值,才算「下载文件」
+  // (手动填的普通网址链接不具备这些特征,仍按直链处理)
+  const FILE_EXT_RE = /\.(?:exe|msi|msix|appx|msixbundle|dmg|pkg|deb|rpm|appimage|zip|7z|gz)(?:[?#]|$)/i;
+  const isFileItem = (it) =>
+    Boolean(it && (it.kind || it.sha256 || it.productCode || FILE_EXT_RE.test(it.url || "")));
+  const hasCode = (it) => Boolean(it && (it.sha256 || it.productCode));
+
+  // 只有一个可选项时:
+  //   · 带 ProductCode/SHA-256,或确实是安装包文件 → 仍展开菜单,把校验值露出来
+  //   · 只是普通网址链接 → 保持原来的直接跳转
+  const onlyOne = list.length === 1;
+  if (list.length === 0 || (onlyOne && !hasCode(list[0]) && !isFileItem(list[0]))) {
     return `<a class="card-download" href="${esc(a.downloadUrl)}" target="_blank" ` +
       `rel="noopener noreferrer" download title="${esc(t("dl_title", { u: a.downloadUrl }))}" ` +
       `aria-label="${esc(t("dl_aria", { n: a.name }))}">${icon}</a>`;
