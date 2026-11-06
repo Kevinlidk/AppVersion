@@ -965,6 +965,9 @@ const I18N = {
     hint_winget: "查询 winget 官方清单仓库,包 ID 需含发布者前缀",
     hint_official: "直接请求厂商公开的版本 API 并读取指定字段,适用于 Chrome、.NET 等提供结构化版本数据的应用",
     hint_manual: "不自动查询,需要时手动更新版本号",
+    link_github: "在 GitHub 上搜索仓库(owner/repo)",
+    link_choco: "在 Chocolatey 社区源中查找包 ID",
+    link_winget: "在 winget 官方清单仓库中查找包 ID",
     official_url: "官方 API 地址(https)",
     official_path: "版本字段路径",
     official_path_ph: "如:releases.0.version",
@@ -1190,6 +1193,9 @@ const I18N = {
     hint_winget: "Queries the official winget manifest repo; the ID needs a publisher prefix",
     hint_official: "Requests the vendor's public version API and reads a chosen field — for apps like Chrome and .NET that expose structured data",
     hint_manual: "No auto-check; update the version number manually when needed",
+    link_github: "Search for the repository (owner/repo) on GitHub",
+    link_choco: "Find the package ID in the Chocolatey community repo",
+    link_winget: "Find the package ID in the official winget manifest repo",
     official_url: "Official API URL (https)",
     official_path: "Version JSON path",
     official_path_ph: "e.g. releases.0.version",
@@ -2240,31 +2246,40 @@ const form = $("#appForm");
 /** 当前表单对应的候选下载列表(由自动检测生成,保存时提交) */
 let pendingDownloads = [];
 
+/**
+ * 渠道元信息。link 为该来源平台的官方入口,渲染成提示文字后的「↗」,
+ * 让用户在填写包 ID / 仓库地址时可以一键直达对应站点查找。
+ */
 const CHANNEL_META = {
   github: {
     label: () => t("src_repo"),
     placeholder: () => t("src_repo_ph"),
     hint: () => t("hint_github"),
+    link: { url: "https://github.com/search", title: () => t("link_github") },
   },
   chocolatey: {
     label: () => t("src_choco"),
     placeholder: () => t("src_choco_ph"),
     hint: () => t("hint_choco"),
+    link: { url: "https://community.chocolatey.org/packages", title: () => t("link_choco") },
   },
   winget: {
     label: () => t("src_winget"),
     placeholder: () => t("src_winget_ph"),
     hint: () => t("hint_winget"),
+    link: { url: "https://github.com/microsoft/winget-pkgs/tree/master/manifests", title: () => t("link_winget") },
   },
   official: {
     label: () => "",
     placeholder: () => "",
     hint: () => t("hint_official"),
+    link: null,
   },
   manual: {
     label: () => "",
     placeholder: () => "",
     hint: () => t("hint_manual"),
+    link: null,
   },
 };
 
@@ -2280,7 +2295,12 @@ function syncChannelUi() {
     $("#sourceLabelText").textContent = m.label();
     $("#sourceInput").placeholder = m.placeholder();
   }
-  $("#channelHint").textContent = m.hint();
+  // 提示文字后附「↗」直达该来源平台(官方自查/手动维护无对应站点,不显示)
+  $("#channelHint").innerHTML = esc(m.hint()) +
+    (m.link
+      ? ' <a class="ext-link" href="' + esc(m.link.url) + '" target="_blank" rel="noopener noreferrer" ' +
+        'title="' + esc(m.link.title()) + '">↗</a>'
+      : "");
   $("#versionLabelText").textContent = auto ? t("cur_version") : t("ver_num");
 }
 
