@@ -204,7 +204,16 @@ async function readApps(env) {
   if (!raw) return [];
   try {
     const list = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
+    if (!Array.isArray(list)) return [];
+    // 兼容历史数据:已废弃的 cisco 渠道在读取时收敛为 official + 内置预设
+    // (只在内存中迁移,写回发生在下一次保存/检查时)
+    for (const it of list) {
+      if (it && it.channel === "cisco") {
+        it.channel = "official";
+        if (!it.officialPreset) it.officialPreset = "cisco-secure-client";
+      }
+    }
+    return list;
   } catch {
     return [];
   }
@@ -478,6 +487,7 @@ function normalizeApp(input, base = {}) {
   if (name.length > 100) throw new ApiError("应用名称不能超过 100 个字符");
 
   const channel = input.channel ?? out.channel ?? "manual";
+  let channelOut = channel; // 可能因遗留渠道迁移而改变
   if (!["github", "chocolatey", "winget", "official", "cisco", "manual"].includes(channel)) {
     throw new ApiError("版本来源仅支持 github / chocolatey / winget / official / cisco / manual");
   }
@@ -487,6 +497,7 @@ function normalizeApp(input, base = {}) {
   let officialUrl = String(input.officialUrl ?? out.officialUrl ?? "").trim();
   let jsonPath = String(input.jsonPath ?? out.jsonPath ?? "").trim();
 
+  if (channelOut !== "official") out.officialPreset = "";
   if (channel === "github") {
     // 允许直接粘贴仓库主页或 .git 链接
     repo = repo
@@ -514,12 +525,32 @@ function normalizeApp(input, base = {}) {
     officialUrl = "";
     jsonPath = "";
   } else if (channel === "official") {
-    officialUrl = validateOfficialUrl(officialUrl);
-    jsonPath = validateJsonPath(jsonPath);
+    // 内置预设:允许只给 officialPreset,由服务端补齐地址与字段路径
+    const presetId = String(input.officialPreset ?? out.officialPreset ?? "").trim();
+    const preset = presetId ? findOfficialPreset(presetId) : null;
+    if (presetId && !preset) throw new ApiError(`未知的内置预设:${presetId}`);
+    if (preset) {
+      out.officialPreset = preset.id;
+      if (preset.mode === "json") {
+        officialUrl = validateOfficialUrl(officialUrl || preset.officialUrl);
+        jsonPath = validateJsonPath(jsonPath || preset.jsonPath);
+      } else {
+        // 专用抓取型预设(如 Cisco)不依赖 API 地址
+        officialUrl = "";
+        jsonPath = "";
+      }
+    } else {
+      out.officialPreset = "";
+      officialUrl = validateOfficialUrl(officialUrl);
+      jsonPath = validateJsonPath(jsonPath);
+    }
     repo = "";
     packageId = "";
   } else if (channel === "cisco") {
-    // Cisco 专属渠道:固定抓取官方 Release Notes,无需用户填写任何字段
+    // 遗留渠道(已并入「官方自查」的内置应用):读取时自动迁移,
+    // 保证历史数据继续可用,同时新数据统一为 official + officialPreset
+    channelOut = "official";
+    out.officialPreset = "cisco-secure-client";
     repo = "";
     packageId = "";
     officialUrl = "";
@@ -532,7 +563,7 @@ function normalizeApp(input, base = {}) {
   }
 
   out.name = name;
-  out.channel = channel;
+  out.channel = channelOut;
   out.repo = repo;
   out.packageId = packageId;
   out.officialUrl = officialUrl;
@@ -1140,6 +1171,75 @@ async function fetchWingetLatest(packageId, env) {
 const CISCO_RELEASE_NOTES_URL =
   "https://www.cisco.com/c/en/us/td/docs/security/vpn_client/anyconnect/Cisco-Secure-Client-5/release/notes/release-notes-cisco-secure-client-5-1.html";
 const CISCO_MAX_BYTES = 8 * 1024 * 1024;
+
+/* ── 「官方自查」内置预设 ──────────────────────────────────────
+   每个预设描述一个应用官方版本源的抓取方式,前端在选中
+   「官方自查」时列出、一键填入,用户不必手写 API 地址与字段路径。
+   新增一个内置应用 = 在下面加一条配置即可(前端从 /api/official-presets 读取)。
+
+   字段:
+     id        唯一标识,存进应用的 officialPreset
+     name/appUrl/iconUrl  展示与自动填充用
+     mode      "json" → 走通用 JSON 字段路径;  "cisco-notes" → 专用抓取
+     officialUrl/jsonPath  mode=json 时的 API 地址与取值路径
+     releaseUrl 来源链接(留空则用 officialUrl)
+     note      预设说明,前端展示 */
+const OFFICIAL_PRESETS = [
+  {
+    id: "chrome-win64-stable",
+    name: "Google Chrome (win64 stable)",
+    appUrl: "https://www.google.com/chrome/",
+    iconUrl: "https://api.iconify.design/logos/chrome.svg",
+    mode: "json",
+    officialUrl:
+      "https://gcvh.kevinlidk.cn/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=fraction=1&pageSize=1",
+    jsonPath: "releases.0.version",
+    releaseUrl: "https://chromereleases.googleblog.com/",
+    note: { zh: "取 win64 stable 渠道最新正式版", en: "Latest stable build for win64" },
+  },
+  {
+    id: "dotnet-10",
+    name: "Microsoft .NET 10.0",
+    appUrl: "https://dotnet.microsoft.com/download/dotnet/10.0",
+    iconUrl: "https://api.iconify.design/logos/dotnet.svg",
+    mode: "json",
+    officialUrl: "https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json",
+    jsonPath: "releases-index[channel-version=10.0].latest-release",
+    releaseUrl: "https://dotnet.microsoft.com/download/dotnet/10.0",
+    note: { zh: "取 .NET 10.0 通道的最新补丁版本", en: "Latest patch of the .NET 10.0 channel" },
+  },
+  {
+    id: "cisco-secure-client",
+    name: "Cisco Secure Client",
+    appUrl: "https://www.cisco.com/c/en/us/support/security/secure-client/model.html",
+    iconUrl: "https://api.iconify.design/logos/cisco.svg",
+    mode: "cisco-notes",
+    releaseUrl: CISCO_RELEASE_NOTES_URL,
+    note: {
+      zh: "解析官方 Release Notes,取最高客户端版本(自动排除模块版本)",
+      en: "Parses the official release notes and takes the highest client build",
+    },
+  },
+];
+
+/** 供前端使用的预设列表(去掉内部实现细节) */
+function publicOfficialPresets() {
+  return OFFICIAL_PRESETS.map((p) => ({
+    id: p.id,
+    name: p.name,
+    appUrl: p.appUrl || "",
+    iconUrl: p.iconUrl || "",
+    mode: p.mode,
+    officialUrl: p.officialUrl || "",
+    jsonPath: p.jsonPath || "",
+    releaseUrl: p.releaseUrl || p.officialUrl || "",
+    note: p.note || { zh: "", en: "" },
+  }));
+}
+
+function findOfficialPreset(id) {
+  return OFFICIAL_PRESETS.find((p) => p.id === id) || null;
+}
 const CISCO_HEADERS = {
   // 官方文档站对非浏览器 UA 较敏感,带上常见 Accept 头更稳
   "user-agent": "Mozilla/5.0 (compatible; app-version-worker/1.2; +https://github.com/Kevinlidk/AppVersion)",
@@ -1307,7 +1407,12 @@ async function fetchLatest(app, env) {
   if (app.channel === "github" && app.repo) return fetchGitHubLatest(app.repo, env);
   if (app.channel === "chocolatey" && app.packageId) return fetchChocolateyLatest(app.packageId);
   if (app.channel === "winget" && app.packageId) return fetchWingetLatest(app.packageId, env);
-  if (app.channel === "official") return fetchOfficialLatest(app);
+  if (app.channel === "official") {
+    // 预设型官方源(如 Cisco)走各自的专用抓取器
+    const preset = app.officialPreset ? findOfficialPreset(app.officialPreset) : null;
+    if (preset && preset.mode === "cisco-notes") return fetchCiscoLatest();
+    return fetchOfficialLatest(app);
+  }
   if (app.channel === "cisco") return fetchCiscoLatest();
   throw new ApiError("手动维护的应用不支持自动查询,请在编辑中更新版本号");
 }
@@ -1545,6 +1650,10 @@ async function handleApi(request, env, pathname) {
 
   /* ── 站点功能开关(管理员可改;访客可读) ── */
 
+  if (pathname === "/api/official-presets" && method === "GET") {
+    return json({ presets: publicOfficialPresets() });
+  }
+
   if (pathname === "/api/settings" && method === "GET") {
     return json(await readSettings(env));
   }
@@ -1656,7 +1765,8 @@ async function handleApi(request, env, pathname) {
         (updated.repo || "") !== (prev.repo || "") ||
         (updated.packageId || "") !== (prev.packageId || "") ||
         (updated.officialUrl || "") !== (prev.officialUrl || "") ||
-        (updated.jsonPath || "") !== (prev.jsonPath || "");
+        (updated.jsonPath || "") !== (prev.jsonPath || "") ||
+        (updated.officialPreset || "") !== (prev.officialPreset || "");
       if (sourceChanged || updated.channel === "manual") {
         delete updated.latestVersion;
         delete updated.releaseUrl;
@@ -1875,6 +1985,22 @@ async function handleApi(request, env, pathname) {
       out.appUrl = "https://www.cisco.com/c/en/us/support/security/secure-client/model.html";
       out.downloadUrl = CISCO_RELEASE_NOTES_URL;
       out.source = "cisco";
+    } else if (draft.channel === "official" && draft.officialPreset) {
+      const preset = findOfficialPreset(draft.officialPreset);
+      if (preset) {
+        out.appUrl = preset.appUrl || "";
+        out.downloadUrl = preset.releaseUrl || preset.officialUrl || "";
+        out.iconUrl = preset.iconUrl || "";
+        out.name = preset.name;
+        try {
+          const latest = preset.mode === "cisco-notes"
+            ? await fetchCiscoLatest()
+            : await fetchOfficialLatest({ officialUrl: preset.officialUrl, jsonPath: preset.jsonPath });
+          out.detectedVersion = latest.version;
+          out.downloadUrl = latest.releaseUrl || out.downloadUrl;
+        } catch { /* 探测失败不阻断,用户仍可保存 */ }
+        out.source = "official-preset";
+      }
     } else if (draft.channel === "official" && draft.officialUrl) {
       // 官方自查:用 API 域名作官网,下载地址留空交给用户填写
       try { out.appUrl = "https://" + new URL(draft.officialUrl).hostname; } catch { /* 忽略 */ }

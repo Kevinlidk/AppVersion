@@ -633,6 +633,39 @@
   }
   .ext-link:hover { border-bottom-color: var(--accent); }
   .link-row .hint-inline { font-size: 11.5px; color: var(--muted); }
+  /* ── 官方自查:内置应用预设 ── */
+  .preset-box {
+    margin: 2px 0 12px; padding: 10px;
+    border: 1px dashed var(--border); border-radius: 10px;
+    background: color-mix(in srgb, var(--accent-weak) 28%, transparent);
+  }
+  .preset-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 8px;
+  }
+  .preset-list { display: flex; flex-direction: column; gap: 6px; }
+  .preset-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 9px; border-radius: 8px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border);
+    transition: border-color .12s, background .12s;
+  }
+  .preset-item:hover { border-color: var(--accent); background: var(--accent-weak); }
+  .preset-item.active { border-color: var(--accent); background: var(--accent-weak); }
+  .preset-item img, .preset-item .preset-icon {
+    width: 22px; height: 22px; border-radius: 5px; flex-shrink: 0; object-fit: contain;
+  }
+  .preset-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .preset-name {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .preset-note {
+    font-size: 11.5px; color: var(--muted); line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .preset-check { color: var(--accent); font-weight: 800; font-size: 14px; flex-shrink: 0; }
+  .preset-empty { font-size: 12.5px; color: var(--muted); padding: 4px 2px; }
   .link-row code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11px; padding: 1px 4px; border-radius: 4px;
@@ -718,7 +751,6 @@
       <button class="chip" data-channel="github">GitHub</button>
       <button class="chip" data-channel="chocolatey">Choco</button>
       <button class="chip" data-channel="winget">winget</button>
-      <button class="chip" data-channel="cisco" data-i18n="chip_cisco">Cisco</button>
       <button class="chip" data-channel="official" data-i18n="chip_official">官方</button>
       <button class="chip" data-channel="manual" data-i18n="chip_manual">手动</button>
     </div>
@@ -769,7 +801,6 @@
         <option value="github" data-i18n="ch_github">GitHub Releases(自动查询)</option>
         <option value="winget" data-i18n="ch_winget">winget 官方源(自动查询)</option>
         <option value="chocolatey" data-i18n="ch_choco">Chocolatey 社区源(自动查询)</option>
-        <option value="cisco" data-i18n="ch_cisco">Cisco Secure Client(官方 Release Notes)</option>
         <option value="official" data-i18n="ch_official">官方自查(自定义 API)</option>
         <option value="manual" data-i18n="ch_manual">手动维护</option>
       </select>
@@ -779,6 +810,13 @@
       <input name="source" id="sourceInput" maxlength="100" autocapitalize="off" spellcheck="false">
     </label>
     <div id="officialFields" class="hidden">
+      <div id="officialPresets" class="preset-box">
+        <div class="preset-head">
+          <span data-i18n="preset_title">内置应用(一键填入)</span>
+          <button type="button" id="presetClearBtn" class="link-btn hidden" data-i18n="preset_clear">改为手动填写</button>
+        </div>
+        <div id="presetList" class="preset-list"></div>
+      </div>
       <label><span data-i18n="official_url">官方 API 地址(https)</span>
         <input name="officialUrl" id="officialUrlInput" maxlength="500" autocapitalize="off" spellcheck="false" placeholder="https://example.com/api/releases.json">
       </label>
@@ -954,7 +992,6 @@ const I18N = {
     ch_github: "GitHub Releases(自动查询)",
     ch_winget: "winget 官方源(自动查询)",
     ch_choco: "Chocolatey 社区源(自动查询)",
-    ch_cisco: "Cisco Secure Client(官方 Release Notes)",
     ch_official: "官方自查(自定义 API)",
     ch_manual: "手动维护",
     src_repo: "仓库(owner/repo)",
@@ -967,13 +1004,14 @@ const I18N = {
     hint_choco: "查询 Chocolatey 社区源官方 API(UniGetUI 聚合的同一数据源)",
     hint_winget: "查询 winget 官方清单仓库,包 ID 需含发布者前缀",
     hint_official: "直接请求厂商公开的版本 API 并读取指定字段,适用于 Chrome、.NET 等提供结构化版本数据的应用",
-    hint_cisco: "固定抓取 Cisco 官方 Release Notes 页面中的客户端版本号,无需填写仓库或包 ID",
+    preset_title: "内置应用(点击一键填入)",
+    preset_clear: "改为手动填写",
+    preset_empty: "暂无内置应用,请在下方手动填写 API 地址",
+    preset_locked: "该内置应用由服务端专用解析,无需填写 API 地址",
     hint_manual: "不自动查询,需要时手动更新版本号",
     link_github: "在 GitHub 上搜索仓库(owner/repo)",
     link_choco: "在 Chocolatey 社区源中查找包 ID",
     link_winget: "在 winget 官方清单仓库中查找包 ID",
-    link_cisco: "打开 Cisco Secure Client 官方 Release Notes",
-    chip_cisco: "Cisco",
     official_url: "官方 API 地址(https)",
     official_path: "版本字段路径",
     official_path_ph: "如:releases.0.version",
@@ -1186,7 +1224,6 @@ const I18N = {
     ch_github: "GitHub Releases (auto)",
     ch_winget: "winget registry (auto)",
     ch_choco: "Chocolatey community (auto)",
-    ch_cisco: "Cisco Secure Client (official release notes)",
     ch_official: "Custom API (official)",
     ch_manual: "Manual",
     src_repo: "Repository (owner/repo)",
@@ -1199,13 +1236,14 @@ const I18N = {
     hint_choco: "Queries the official Chocolatey community API (the same data source UniGetUI aggregates)",
     hint_winget: "Queries the official winget manifest repo; the ID needs a publisher prefix",
     hint_official: "Requests the vendor's public version API and reads a chosen field — for apps like Chrome and .NET that expose structured data",
-    hint_cisco: "Scrapes the client version from Cisco's official Release Notes — no repo or package ID needed",
+    preset_title: "Built-in apps (click to fill)",
+    preset_clear: "Enter manually instead",
+    preset_empty: "No built-in apps yet — fill in the API URL below",
+    preset_locked: "This built-in app is parsed server-side; no API URL needed",
     hint_manual: "No auto-check; update the version number manually when needed",
     link_github: "Search for the repository (owner/repo) on GitHub",
     link_choco: "Find the package ID in the Chocolatey community repo",
     link_winget: "Find the package ID in the official winget manifest repo",
-    link_cisco: "Open the official Cisco Secure Client release notes",
-    chip_cisco: "Cisco",
     official_url: "Official API URL (https)",
     official_path: "Version JSON path",
     official_path_ph: "e.g. releases.0.version",
@@ -2175,6 +2213,7 @@ async function load() {
     apps = appList;
     groups = groupList;
     siteSettings = settings;
+    fetchOfficialPresets();
     render();
   } catch (e) {
     listEl.innerHTML = `
@@ -2258,6 +2297,10 @@ const dlg = $("#appDialog");
 const form = $("#appForm");
 /** 当前表单对应的候选下载列表(由自动检测生成,保存时提交) */
 let pendingDownloads = [];
+/** 官方自查的内置预设(从 /api/official-presets 拉取,失败时为空) */
+let officialPresets = [];
+/** 当前选中的预设 id(空 = 手动填写官方 API) */
+let selectedPreset = "";
 
 /** Cisco 专属渠道的固定来源页(与 Worker 端常量保持一致) */
 const CISCO_NOTES_URL =
@@ -2286,12 +2329,6 @@ const CHANNEL_META = {
     hint: () => t("hint_winget"),
     link: { url: "https://github.com/microsoft/winget-pkgs/tree/master/manifests", title: () => t("link_winget") },
   },
-  cisco: {
-    label: () => "",
-    placeholder: () => "",
-    hint: () => t("hint_cisco"),
-    link: { url: CISCO_NOTES_URL, title: () => t("link_cisco") },
-  },
   official: {
     label: () => "",
     placeholder: () => "",
@@ -2306,6 +2343,67 @@ const CHANNEL_META = {
   },
 };
 
+/** 拉取内置预设(失败时静默留空,不影响手动填写) */
+async function fetchOfficialPresets() {
+  try {
+    const d = await api("/api/official-presets");
+    officialPresets = Array.isArray(d.presets) ? d.presets : [];
+  } catch {
+    officialPresets = [];
+  }
+}
+
+/** 渲染「内置应用」列表;选中项高亮并在右侧显示 ✓ */
+function renderPresets() {
+  const box = $("#presetList");
+  if (!box) return;
+  if (!officialPresets.length) {
+    box.innerHTML = `<p class="preset-empty">${esc(t("preset_empty"))}</p>`;
+    $("#presetClearBtn").classList.add("hidden");
+    return;
+  }
+  box.innerHTML = officialPresets.map((p) => {
+    const note = (p.note && (p.note[lang] || p.note.zh)) || "";
+    const active = selectedPreset === p.id;
+    const icon = p.iconUrl
+      ? `<img src="${esc(p.iconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+      : `<span class="preset-icon">${esc(p.name.slice(0, 1).toUpperCase())}</span>`;
+    return `<div class="preset-item${active ? " active" : ""}" data-preset="${esc(p.id)}" role="button" tabindex="0">` +
+      icon +
+      `<span class="preset-main"><span class="preset-name">${esc(p.name)}</span>` +
+      (note ? `<span class="preset-note">${esc(note)}</span>` : "") + `</span>` +
+      (active ? '<span class="preset-check" aria-hidden="true">✓</span>' : "") +
+      `</div>`;
+  }).join("");
+  $("#presetClearBtn").classList.toggle("hidden", !selectedPreset);
+}
+
+/** 选中某个预设:自动填好名称/地址/字段路径(API 类),并锁定输入框 */
+function applyPreset(id) {
+  const p = officialPresets.find((x) => x.id === id);
+  if (!p) return;
+  selectedPreset = p.id;
+  if (!form.name.value.trim()) form.name.value = p.name;
+  $("#officialUrlInput").value = p.officialUrl || "";
+  $("#jsonPathInput").value = p.jsonPath || "";
+  // 专用抓取型预设没有 API 地址,输入框只读并给出说明
+  const manual = p.mode !== "json";
+  $("#officialUrlInput").readOnly = manual;
+  $("#jsonPathInput").readOnly = manual;
+  renderPresets();
+  syncChannelUi();
+}
+
+/** 取消预设,回到手动填写官方 API */
+function clearPreset() {
+  selectedPreset = "";
+  $("#officialUrlInput").readOnly = false;
+  $("#jsonPathInput").readOnly = false;
+  $("#officialUrlInput").value = "";
+  $("#jsonPathInput").value = "";
+  renderPresets();
+}
+
 function syncChannelUi() {
   const ch = form.channel.value;
   const m = CHANNEL_META[ch];
@@ -2316,6 +2414,7 @@ function syncChannelUi() {
   const needsSource = ch === "github" || ch === "chocolatey" || ch === "winget";
   $("#sourceLabel").classList.toggle("hidden", !needsSource);
   $("#officialFields").classList.toggle("hidden", !official);
+  if (official) renderPresets();
   if (needsSource) {
     $("#sourceLabelText").textContent = m.label();
     $("#sourceInput").placeholder = m.placeholder();
@@ -2360,7 +2459,28 @@ $("#downloadUrlInput").addEventListener("input", () => { pendingDownloads = []; 
   dlg.showModal();
 }
 
-form.channel.addEventListener("change", syncChannelUi);
+form.channel.addEventListener("change", () => {
+  // 切换渠道时清掉预设选择,避免把预设残留在别的渠道上
+  if (form.channel.value !== "official" && selectedPreset) {
+    selectedPreset = "";
+    $("#officialUrlInput").readOnly = false;
+    $("#jsonPathInput").readOnly = false;
+  }
+  syncChannelUi();
+});
+
+$("#presetList").addEventListener("click", (e) => {
+  const item = e.target.closest(".preset-item");
+  if (item) applyPreset(item.dataset.preset);
+});
+$("#presetList").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const item = e.target.closest(".preset-item");
+  if (!item) return;
+  e.preventDefault();
+  applyPreset(item.dataset.preset);
+});
+$("#presetClearBtn").addEventListener("click", clearPreset);
 $("#cancelBtn").addEventListener("click", () => dlg.close());
 
 /**
@@ -2500,6 +2620,7 @@ form.addEventListener("submit", async (e) => {
   if (ch === "github") payload.repo = source;
   else if (ch === "chocolatey" || ch === "winget") payload.packageId = source;
   else if (ch === "official") {
+    payload.officialPreset = selectedPreset;
     payload.officialUrl = $("#officialUrlInput").value.trim();
     payload.jsonPath = $("#jsonPathInput").value.trim();
   }
@@ -2507,8 +2628,11 @@ form.addEventListener("submit", async (e) => {
   if (ch === "github" && !payload.repo) { toast(t("need_repo"), "error"); return; }
   if ((ch === "chocolatey" || ch === "winget") && !payload.packageId) { toast(t("need_pkg"), "error"); return; }
   if (ch === "official") {
-    if (!payload.officialUrl) { toast(t("need_official_url"), "error"); return; }
-    if (!payload.jsonPath) { toast(t("need_json_path"), "error"); return; }
+    const preset = officialPresets.find((x) => x.id === selectedPreset);
+    // 预设已提供地址与字段路径;只有手动填写模式才要求两者必填
+    const needsManual = !preset;
+    if (needsManual && !payload.officialUrl) { toast(t("need_official_url"), "error"); return; }
+    if (needsManual && !payload.jsonPath) { toast(t("need_json_path"), "error"); return; }
   }
   const saveBtn = $("#saveBtn");
   saveBtn.disabled = true;

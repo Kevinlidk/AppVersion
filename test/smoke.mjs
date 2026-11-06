@@ -821,11 +821,13 @@ await test("diagnostics:未配置 GITHUB_TOKEN 时给出告警", async () => {
 
 /* ── Cisco Secure Client 专属渠道 ── */
 
-await test("cisco 渠道:从 Release Notes 提取最高版本,忽略模块版本", async () => {
+await test("cisco 遗留渠道:自动迁移为 official+预设,并能从 Release Notes 取最高版本", async () => {
   const a = await bodyOf(await call("/api/apps", post({
     name: "Cisco Secure Client", channel: "cisco",
   })));
-  assertEq(a.channel, "cisco", "渠道");
+  // 新建时即收敛到新形态,前端不再有 cisco 渠道
+  assertEq(a.channel, "official", "自动迁移为 official");
+  assertEq(a.officialPreset, "cisco-secure-client", "自动补上预设");
   assertEq(a.repo, "", "无需 repo");
   assertEq(a.packageId, "", "无需 packageId");
   assertEq(a.officialUrl, "", "无需 officialUrl");
@@ -855,6 +857,81 @@ await test("cisco 渠道:页面结构异常时给出明确错误", async () => {
   assertEq(blocked.status, 403, "403 透传");
   ciscoMode = "ok";
   await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+/* ── 官方自查:内置预设 ── */
+
+await test("official-presets:公开列出内置应用(Chrome / .NET / Cisco)", async () => {
+  const res = await worker.fetch(new Request("http://localhost/api/official-presets"), env, ctx);
+  assertEq(res.status, 200, "状态码");
+  const { presets } = await bodyOf(res);
+  if (!Array.isArray(presets) || presets.length < 3) throw new Error("内置预设数量不足");
+  const ids = presets.map((p) => p.id);
+  for (const id of ["chrome-win64-stable", "dotnet-10", "cisco-secure-client"]) {
+    if (!ids.includes(id)) throw new Error("缺少预设:" + id);
+  }
+  const chrome = presets.find((p) => p.id === "chrome-win64-stable");
+  assertEq(chrome.mode, "json", "Chrome 走 JSON 模式");
+  if (!chrome.officialUrl.startsWith("https://")) throw new Error("Chrome 地址应为 https");
+  assertEq(chrome.jsonPath, "releases.0.version", "Chrome 字段路径");
+  const dotnet = presets.find((p) => p.id === "dotnet-10");
+  assertEq(dotnet.jsonPath, "releases-index[channel-version=10.0].latest-release", ".NET 字段路径");
+  const cisco = presets.find((p) => p.id === "cisco-secure-client");
+  assertEq(cisco.mode, "cisco-notes", "Cisco 走专用解析");
+});
+
+await test("official 预设:只给 officialPreset 也能创建并查询(Cisco)", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "Cisco Secure Client", channel: "official", officialPreset: "cisco-secure-client",
+  })));
+  assertEq(a.channel, "official", "仍是 official 渠道");
+  assertEq(a.officialPreset, "cisco-secure-client", "预设已记录");
+  const res = await call("/api/apps/" + a.id + "/refresh", { method: "POST" });
+  assertEq(res.status, 200, "刷新成功");
+  assertEq((await bodyOf(res)).latestVersion, "5.1.20.333", "走 Cisco 专用解析");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("official 预设:JSON 型预设自动补齐地址与字段路径(Chrome)", async () => {
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "Google Chrome", channel: "official", officialPreset: "chrome-win64-stable",
+  })));
+  if (!a.officialUrl.startsWith("https://")) throw new Error("未补齐 officialUrl");
+  assertEq(a.jsonPath, "releases.0.version", "未补齐 jsonPath");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("official 预设:未知预设返回 400;非 official 渠道会清空预设", async () => {
+  const bad = await call("/api/apps", post({
+    name: "X", channel: "official", officialPreset: "no-such-preset",
+  }));
+  assertEq(bad.status, 400, "未知预设状态码");
+
+  // 从 official 切到 github 时,预设应被清空(不残留)
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "切换测试", channel: "official", officialPreset: "cisco-secure-client",
+  })));
+  const moved = await bodyOf(await call("/api/apps/" + a.id, put({
+    channel: "github", repo: "foo/bar",
+  })));
+  assertEq(moved.channel, "github", "渠道已切换");
+  assertEq(moved.officialPreset, "", "预设已清空");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("遗留 cisco 渠道:已存入 KV 的历史数据读取时自动迁移", async () => {
+  const envL = { APP_KV: makeKV(), ADMIN_PASSWORD: "pl" };
+  // 用旧格式直接写入 KV,模拟上线前的历史记录
+  await envL.APP_KV.put("apps:v1", JSON.stringify([{
+    id: "legacy-cisco-1", name: "旧 Cisco 应用", channel: "cisco",
+    createdAt: new Date().toISOString(),
+  }]));
+  const res = await worker.fetch(new Request("http://localhost/api/apps"), envL, ctx);
+  const apps = await bodyOf(res);
+  const legacy = apps.find((x) => x.id === "legacy-cisco-1");
+  if (!legacy) throw new Error("遗留应用未返回");
+  assertEq(legacy.channel, "official", "已迁移为 official");
+  assertEq(legacy.officialPreset, "cisco-secure-client", "已补上预设");
 });
 
 /* ── winget installer.yaml → 下载候选 ── */
