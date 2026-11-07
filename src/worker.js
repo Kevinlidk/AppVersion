@@ -488,6 +488,37 @@ function pickByJsonPath(root, path) {
 
 /* ─────────────── 字段校验与归一化 ─────────────── */
 
+/* ── 静默安装参数(每应用可选) ────────────────────────────
+   三个板块 install / update / uninstall,各含 cmd 与 powershell 两条命令。
+   未登录访客在卡片面板中只读;管理员经 PUT /api/apps/:id 编辑维护。
+   文本限长 2000,剔除控制字符;空内容时前端回退到按渠道生成的模板。 */
+const SILENT_SECTIONS = ["install", "update", "uninstall"];
+const SILENT_FIELD_MAX = 2000;
+
+function normalizeSilentSection(raw) {
+  const out = { cmd: "", powershell: "" };
+  if (!raw || typeof raw !== "object") return out;
+  for (const k of ["cmd", "powershell"]) {
+    // 仅接受字符串:数字/对象等一律归空串,避免 [object Object] 垃圾入库
+    if (typeof raw[k] === "string") {
+      let v = raw[k].replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+      if (v.length > SILENT_FIELD_MAX) v = v.slice(0, SILENT_FIELD_MAX);
+      out[k] = v.replace(/\s+$/, "");
+    }
+  }
+  return out;
+}
+
+function normalizeSilentInstall(raw) {
+  const out = {};
+  for (const sec of SILENT_SECTIONS) out[sec] = { cmd: "", powershell: "" };
+  if (!raw || typeof raw !== "object") return out;
+  for (const sec of SILENT_SECTIONS) {
+    if (raw[sec] !== undefined) out[sec] = normalizeSilentSection(raw[sec]);
+  }
+  return out;
+}
+
 /**
  * 校验并归一化应用字段。
  * @param {object} input  请求体字段
@@ -583,6 +614,10 @@ function normalizeApp(input, base = {}) {
   out.packageId = packageId;
   out.officialUrl = officialUrl;
   out.jsonPath = jsonPath;
+  // 静默安装参数:编辑请求未携带时保留原值,导入时逐条归一化
+  out.silentInstall = normalizeSilentInstall(
+    input.silentInstall !== undefined ? input.silentInstall : out.silentInstall
+  );
   // 可选自定义图标:留空则前端按渠道自动推断
   if (input.iconUrl !== undefined) {
     const raw = String(input.iconUrl).trim();

@@ -23,6 +23,7 @@
     - 想新增内置应用?在 `src/worker.js` 的 `OFFICIAL_PRESETS` 数组里加一条配置即可(前端通过 `GET /api/official-presets` 动态读取,无需改前端);仍可随时点「改为手动填写」回到自定义 API 模式
     - 旧版独立的 `cisco` 渠道已并入此列表:历史数据在读取时自动迁移为 `official` + `officialPreset`,无需手工处理
   - **手动维护**:官网无查询途径的应用直接手动记录版本号
+  - **💬 静默安装参数(卡片右上角)** —— 状态徽章左侧的终端图标,点击打开面板:**安装 / 更新 / 卸载** 三个板块,每块支持 cmd 与 PowerShell 切换与语法高亮,命令与 ProductCode / SHA-256 校验值均可一键复制;winget 渠道自动生成 `winget install/upgrade/uninstall --id=<包ID> --silent` 模板。内容默认对所有访客公开只读,**管理员登录后可在面板内直接编辑维护**(存 KV,随导出/导入配置保留);面板附参考链接 [silentinstalls.com](https://silentinstalls.com)
   - **⇄ Chocolatey → winget 一键转换**:Chocolatey 应用卡片上提供转换按钮。若 Chocolatey 被 Cloudflare WAF 拦截(见下方说明),可一键改用它对应的 winget 包
     - 自动在 `microsoft/winget-pkgs` 中搜索候选(应用名 / 包 ID 代码搜索 + 由官网域名推导的启发式 ID)
     - 候选会**逐个校验是否真实存在于清单仓库**,只列出可用的包并显示其最新版本
@@ -317,7 +318,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,80 项)
+npm test         # API + 定时推送冒烟测试(离线,83 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:

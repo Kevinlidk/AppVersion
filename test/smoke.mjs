@@ -997,6 +997,67 @@ await test("check 分批:通知在最后一批聚合发送,进度走 KV", async 
   assertEq(bad.status, 410, "不存在的运行返回 410");
 });
 
+/* ── 静默安装参数(silentInstall) ── */
+
+await test("silentInstall:访客只读(401)、管理员保存、归一化剔除控制字符", async () => {
+  // 管理员创建应用并保存静默参数
+  const a = await bodyOf(await call("/api/apps", post({ name: "静默应用", channel: "winget", packageId: "VideoLAN.VLC" })));
+  const savedPut = await call("/api/apps/" + a.id, put({
+    silentInstall: {
+      install: { cmd: "winget install --id VideoLAN.VLC --silent", powershell: 'winget install --id "VideoLAN.VLC" --silent' },
+      update: { cmd: "winget upgrade --id VideoLAN.VLC --silent" },
+      uninstall: { cmd: "winget uninstall --id VideoLAN.VLC 静默", powershell: "" },
+    },
+  }));
+  assertEq(savedPut.status, 200, "管理员保存");
+  const saved = await bodyOf(savedPut);
+  // 控制字符被剔除,长度截断不影响正常文本
+  assertEq(saved.silentInstall.install.cmd, "winget install --id VideoLAN.VLC --silent", "cmd 保留");
+  assertEq(saved.silentInstall.uninstall.cmd.includes(" "), false, "控制字符被剔除");
+  assertEq(saved.silentInstall.uninstall.cmd.includes("静默"), true, "正文保留");
+  if (saved.silentInstall.update.powershell === undefined) throw new Error("空 powershell 应保留为空串字段");
+
+  // 访客 GET 可见(公开只读,走列表接口);访客 PUT → 401
+  const anonList = await bodyOf(await worker.fetch(new Request("http://localhost/api/apps"), env, ctx));
+  const anonApp = anonList.find((x) => x.id === a.id);
+  assertEq(anonApp.silentInstall.install.cmd, "winget install --id VideoLAN.VLC --silent", "访客可见");
+  const anonPut = await worker.fetch(new Request("http://localhost/api/apps/" + a.id, {
+    method: "PUT", body: JSON.stringify({ silentInstall: { install: { cmd: "evil" } } }),
+  }), env, ctx);
+  assertEq(anonPut.status, 401, "访客写应 401");
+
+  // 非字符串字段归一化为空串
+  const bad = await call("/api/apps/" + a.id, put({
+    silentInstall: { install: { cmd: 12345 } },
+  }));
+  assertEq((await bodyOf(bad)).silentInstall.install.cmd, "", "非字符串归一化为空串");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+});
+
+await test("silentInstall:配置导出包含该字段且导入还原", async () => {
+  const { cookie } = await loginAs(env, ADMIN_PASSWORD);
+  const callA = (path, opts = {}) => worker.fetch(new Request("http://localhost" + path, {
+    ...opts, headers: { ...(opts.headers || {}), cookie: "av_session=" + cookie },
+  }), env, ctx);
+  const a = await bodyOf(await callA("/api/apps", post({
+    name: "导出静默", channel: "winget", packageId: "VideoLAN.VLC",
+    silentInstall: { install: { cmd: "winget install --id VideoLAN.VLC --silent" } },
+  })));
+  const exported = await bodyOf(await callA("/api/apps/export"));
+  const rec = exported.apps.find((x) => x.id === a.id);
+  assertEq(rec.silentInstall.install.cmd, "winget install --id VideoLAN.VLC --silent", "导出包含 silentInstall");
+
+  // 删除后导入还原
+  await callA("/api/apps/" + a.id, { method: "DELETE" });
+  const imp = await callA("/api/apps/import", { method: "POST", body: JSON.stringify(exported) });
+  assertEq(imp.status, 200, "导入状态码");
+  const restored = (await bodyOf(await callA("/api/apps"))).find((x) => x.name === "导出静默");
+  if (!restored) throw new Error("导入后应用丢失");
+  assertEq(restored.silentInstall.install.cmd, "winget install --id VideoLAN.VLC --silent", "导入还原 silentInstall");
+  // 清理导入的记录
+  await callA("/api/apps/" + restored.id, { method: "DELETE" });
+});
+
 /* ── winget：嵌套分组目录 + last commit date ── */
 
 await test("winget:分组目录(2020/)下的真实版本被正确展开", async () => {

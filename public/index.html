@@ -388,6 +388,69 @@
     box-shadow: var(--shadow);
   }
   .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .card-top-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  /* 静默安装参数入口(卡片右上角,状态徽章左侧) */
+  .silent-btn {
+    flex-shrink: 0; width: 26px; height: 26px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 7px; border: none; background: transparent;
+    color: var(--muted); cursor: pointer;
+    transition: color .12s, background .12s;
+  }
+  .silent-btn:hover { color: var(--accent); background: var(--accent-weak); }
+  .silent-btn:active { transform: scale(.92); }
+  /* 静默参数面板 */
+  .silent-sec { margin-bottom: 16px; }
+  .silent-sec:last-of-type { margin-bottom: 10px; }
+  .silent-sec-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .silent-sec-title { font-weight: 700; font-size: 13.5px; color: var(--text); }
+  .silent-tabs { display: inline-flex; gap: 4px; }
+  .silent-tab {
+    font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 6px;
+    border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .silent-tab:hover { color: var(--accent); border-color: var(--accent); }
+  .silent-tab.active { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
+  .silent-code {
+    position: relative; margin: 0 0 6px; padding: 10px 34px 10px 12px;
+    border-radius: 8px; background: var(--input-bg); border: 1px solid var(--border);
+    font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12px;
+    line-height: 1.65; color: var(--text); white-space: pre-wrap; word-break: break-all;
+    min-height: 20px;
+  }
+  .silent-copy {
+    position: absolute; top: 6px; right: 6px;
+    width: 22px; height: 22px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; border: none; background: transparent;
+    color: var(--muted); cursor: pointer; transition: color .12s, background .12s;
+  }
+  .silent-copy:hover { color: var(--accent); background: var(--accent-weak); }
+  .silent-copy:active { transform: scale(.9); }
+  .silent-copy svg { width: 12px; height: 12px; }
+  .hl-k { color: var(--accent); font-weight: 700; }
+  .hl-s { color: var(--warn); }
+  .hl-c { color: var(--muted); font-style: italic; }
+  .hl-p { color: var(--ok); }
+  .hl-v { color: var(--danger); }
+  .silent-values { margin: 2px 0 4px; }
+  .silent-values-title { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 10px 0 6px; }
+  .silent-values .dl-code { margin: 0 0 6px; }
+  .silent-none { font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
+  .silent-edit-ta {
+    width: 100%; box-sizing: border-box; display: block;
+    margin: 0 0 8px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+    font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12px;
+    line-height: 1.55; resize: vertical; min-height: 54px;
+  }
+  .silent-edit-ta:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .silent-edit-label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin: 8px 0 4px; }
+  .silent-ref { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; }
   /* 应用图标:官方图标 / 缩写字母兜底 */
   .app-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
   /* 图标占位槽:解析前显示字母,解析成功后替换为 <img> */
@@ -937,6 +1000,21 @@
   </form>
 </dialog>
 
+<dialog id="silentDialog">
+  <h2 id="silentTitle">静默安装参数</h2>
+  <div id="silentBody"></div>
+  <p class="hint link-row silent-ref">
+    <span data-i18n="silent_ref">参考:</span>
+    <a class="ext-link" href="https://silentinstalls.com" target="_blank" rel="noopener noreferrer"
+       title="silentinstalls.com — 各类应用的静默安装参数参考" data-i18n-title="silent_ref_title">silentinstalls.com ↗</a>
+  </p>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="silentCloseBtn" data-i18n="cancel">关闭</button>
+    <button type="button" class="btn" id="silentEditBtn" data-i18n="act_edit">编辑</button>
+    <button type="button" class="btn primary" id="silentSaveBtn" data-i18n="save">保存</button>
+  </div>
+</dialog>
+
 <footer class="footer">
   AppVersion · <span data-i18n="footer_run">运行于 Cloudflare Workers</span> ·
   <a href="https://github.com/Kevinlidk/AppVersion" target="_blank" rel="noopener" data-i18n="footer_repo">GitHub 仓库</a>
@@ -1074,6 +1152,17 @@ const I18N = {
     src_official: "官方自查",
     src_manual: "手动维护",
     kind_file: "文件",
+    silent_btn_title: "静默安装参数",
+    silent_title: "静默安装参数",
+    sec_install: "安装",
+    sec_update: "更新",
+    sec_uninstall: "卸载",
+    silent_ref: "参考:",
+    silent_ref_title: "silentinstalls.com — 各类应用的静默安装参数参考",
+    silent_values_title: "校验值与标识",
+    silent_copy_cmd: "复制命令",
+    silent_val_id: "包 ID",
+    silent_none: "此应用暂无静默参数,管理员登录后可编辑填写",
     copied: "已复制到剪贴板",
     copy_fail: "复制失败,请手动选择复制",
     dl_title: "下载最新版本:{u}",
@@ -1306,6 +1395,17 @@ const I18N = {
     src_official: "Custom API",
     src_manual: "Manual",
     kind_file: "File",
+    silent_btn_title: "Silent install parameters",
+    silent_title: "Silent install parameters",
+    sec_install: "Install",
+    sec_update: "Update",
+    sec_uninstall: "Uninstall",
+    silent_ref: "Reference:",
+    silent_ref_title: "silentinstalls.com — silent install switch reference for popular apps",
+    silent_values_title: "Checksums & identifiers",
+    silent_copy_cmd: "Copy command",
+    silent_val_id: "Package ID",
+    silent_none: "No silent parameters for this app yet — sign in as admin to edit",
     copied: "Copied to clipboard",
     copy_fail: "Copy failed — please copy it manually",
     dl_title: "Download latest: {u}",
@@ -1878,6 +1978,159 @@ async function copyDlValue(text) {
   toast(ok ? t("copied") : t("copy_fail"));
 }
 
+/* ── 静默安装参数(卡片右上角 → 弹窗面板) ────────────────────
+   三个板块:安装 / 更新 / 卸载;每个板块 cmd 与 PowerShell 两条命令,
+   轻量高亮(不引库),校验值用与下载菜单一致的 dl-code 复制框。
+   内容公开只读;管理员可在面板中直接编辑(存 KV,随导出/导入保留)。
+   winget 渠道未编辑时按包 ID 自动生成模板;其他渠道为空时显示提示。 */
+const SILENT_SECTIONS = [
+  { key: "install", labelKey: "sec_install" },
+  { key: "update", labelKey: "sec_update" },
+  { key: "uninstall", labelKey: "sec_uninstall" },
+];
+const PRODUCT_CODE_RE = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i;
+const silentDlg = $("#silentDialog");
+let silentAppId = null;
+let silentEditing = false;
+let silentDraft = null;   // 编辑态草稿 {install:{cmd,powershell}, ...}
+
+/** 卡片右上角的静默参数入口按钮 */
+function silentBtnHtml(a) {
+  const svg =
+    `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`;
+  return `<button type="button" class="silent-btn" data-id="${esc(a.id)}" ` +
+    `title="${esc(t("silent_btn_title"))}" aria-label="${esc(t("silent_btn_title"))}">${svg}</button>`;
+}
+
+/** 三板块内容:应用已存的编辑值优先;winget 渠道空板块按包 ID 生成模板 */
+function silentContentFor(app) {
+  const stored = app && app.silentInstall ? app.silentInstall : {};
+  const out = {};
+  for (const sec of SILENT_SECTIONS) {
+    const key = sec.key;
+    const s = stored[key] || {};
+    let cmd = String(s.cmd ?? "");
+    let ps = String(s.powershell ?? "");
+    if (!cmd.trim() && !ps.trim() && app.channel === "winget" && app.packageId) {
+      const verb = key === "install" ? "install" : key === "update" ? "upgrade" : "uninstall";
+      const tail = verb === "uninstall"
+        ? "--exact --silent"
+        : "--exact --silent --accept-package-agreements --accept-source-agreements";
+      cmd = `winget ${verb} --id ${app.packageId} ${tail}`;
+      ps = `winget ${verb} --id "${app.packageId}" ${tail}`;
+    }
+    out[key] = { cmd, powershell: ps };
+  }
+  return out;
+}
+
+/** 轻量命令高亮:先转义再保守着色(命中即包成占位符,避免嵌套替换) */
+function highlightCode(text, lang) {
+  const escd = esc(text);
+  const tokens = [];
+  const put = (cls, m) => {
+    tokens.push(`<span class="hl-${cls}">${m}</span>`);
+    return "\u0000" + (tokens.length - 1) + "\u0000";
+  };
+  let out = escd;
+  if (lang === "powershell") {
+    out = out.replace(/#[^\n]*/g, (m) => put("c", m));
+    out = out.replace(/&quot;[^&\n]*&quot;|&#39;[^&\n]*&#39;/g, (m) => put("s", m));
+    out = out.replace(/(\$[A-Za-z_][\w]*)/g, (m) => put("v", m));
+    out = out.replace(/(^|\s)(-{1,2}[A-Za-z][\w-]*)/g, (m, pre, p) => pre + put("p", p));
+    out = out.replace(/\b(winget|msiexec|Start-Process|Remove-Item|Copy-Item|New-Item|Get-Content)\b/gi, (m) => put("k", m));
+  } else {
+    out = out.replace(/\brem\s[^\n]*/gi, (m) => put("c", m));
+    out = out.replace(/&quot;[^&\n]*&quot;/g, (m) => put("s", m));
+    out = out.replace(/(^|\s)(-{1,2}[A-Za-z][\w-]*|\/[a-zA-Z][\w-]*)/g, (m, pre, p) => pre + put("p", p));
+    out = out.replace(/\b(winget|msiexec|echo|set)\b/gi, (m) => put("k", m));
+  }
+  return out.replace(/\u0000(\d+)\u0000/g, (m, i) => tokens[Number(i)]);
+}
+
+/** 校验值与标识:包 ID + 下载候选中去重后的 ProductCode / SHA-256 */
+function silentValueBoxes(app) {
+  const vals = [];
+  if (app.packageId) vals.push({ label: t("silent_val_id"), value: app.packageId });
+  const seen = new Set();
+  for (const d of (Array.isArray(app.downloads) ? app.downloads : [])) {
+    if (d.productCode && !seen.has("pc:" + d.productCode)) {
+      seen.add("pc:" + d.productCode);
+      vals.push({ label: "ProductCode", value: d.productCode });
+    }
+    if (d.sha256 && !seen.has("sha:" + d.sha256)) {
+      seen.add("sha:" + d.sha256);
+      vals.push({ label: "SHA-256", value: d.sha256 });
+    }
+  }
+  if (!vals.length) return "";
+  const copySvg =
+    `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" ` +
+    `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+  return `<div class="silent-values"><div class="silent-values-title">${esc(t("silent_values_title"))}</div>` +
+    vals.map((v) => `<div class="dl-code" title="${esc(v.label + ":" + v.value)}"><code>${esc(v.value)}</code>` +
+      `<button type="button" class="dl-copy" data-copy="${esc(v.value)}" title="${esc(t("code_copy", { l: v.label }))}" ` +
+      `aria-label="${esc(t("code_copy", { l: v.label }))}">${copySvg}</button></div>`).join("") +
+    `</div>`;
+}
+
+function openSilentDialog(id) {
+  const app = apps.find((x) => x.id === id);
+  if (!app) return;
+  silentAppId = id;
+  silentEditing = false;
+  renderSilentBody();
+  silentDlg.showModal();
+}
+
+function renderSilentBody() {
+  const app = apps.find((x) => x.id === silentAppId);
+  if (!app) { silentDlg.close(); return; }
+  $("#silentTitle").textContent = t("silent_title") + " · " + app.name;
+  $("#silentEditBtn").classList.toggle("hidden", !isAdmin || silentEditing);
+  $("#silentSaveBtn").classList.toggle("hidden", !(isAdmin && silentEditing));
+  const body = $("#silentBody");
+
+  if (silentEditing) {
+    const draft = silentDraft;
+    body.innerHTML = SILENT_SECTIONS.map((sec) => `
+      <div class="silent-sec" data-sec="${sec.key}">
+        <div class="silent-sec-head"><span class="silent-sec-title">${esc(t(sec.labelKey))}</span></div>
+        <label class="silent-edit-label">cmd</label>
+        <textarea class="silent-edit-ta" data-sec="${sec.key}" data-kind="cmd" maxlength="2000">${esc(draft[sec.key].cmd)}</textarea>
+        <label class="silent-edit-label">PowerShell</label>
+        <textarea class="silent-edit-ta" data-sec="${sec.key}" data-kind="powershell" maxlength="2000">${esc(draft[sec.key].powershell)}</textarea>
+      </div>`).join("");
+    return;
+  }
+
+  const content = silentContentFor(app);
+  const sectionsHtml = SILENT_SECTIONS.map((sec) => {
+    const c = content[sec.key];
+    return `<div class="silent-sec" data-sec="${sec.key}">
+      <div class="silent-sec-head">
+        <span class="silent-sec-title">${esc(t(sec.labelKey))}</span>
+        <div class="silent-tabs" role="tablist">
+          <button type="button" class="silent-tab active" data-lang="cmd">cmd</button>
+          <button type="button" class="silent-tab" data-lang="powershell">PowerShell</button>
+        </div>
+      </div>
+      <pre class="silent-code" data-lang="cmd" data-raw="${esc(c.cmd)}"><code>${highlightCode(c.cmd, "cmd")}</code><button type="button" class="silent-copy" title="${esc(t("silent_copy_cmd"))}" aria-label="${esc(t("silent_copy_cmd"))}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></pre>
+      <pre class="silent-code hidden" data-lang="powershell" data-raw="${esc(c.powershell)}"><code>${highlightCode(c.powershell, "powershell")}</code><button type="button" class="silent-copy" title="${esc(t("silent_copy_cmd"))}" aria-label="${esc(t("silent_copy_cmd"))}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></pre>
+    </div>`;
+  }).join("");
+
+  const anyContent = SILENT_SECTIONS.some((sec) => content[sec.key].cmd.trim() || content[sec.key].powershell.trim());
+  const noneHint = anyContent || app.packageId || (app.downloads || []).length
+    ? ""
+    : `<p class="silent-none">${esc(t("silent_none"))}</p>`;
+
+  body.innerHTML = sectionsHtml + noneHint + silentValueBoxes(app);
+}
+
 /** 卡片右下角的下载入口:有多个候选项时悬停/点击展开菜单 */
 function downloadBtnHtml(a) {
   if (!a.downloadUrl) return "";
@@ -1982,7 +2235,10 @@ function cardHtml(a) {
           ${iconHtml(a)}
           ${nameHtml(a)}
         </div>
-        ${badgeOf(a)}
+        <div class="card-top-actions">
+          ${silentBtnHtml(a)}
+          ${badgeOf(a)}
+        </div>
       </div>
       <div class="ver">
         <div><span class="ver-label">${manual ? t("ver_version") : t("ver_current")}</span><b>${esc(a.version || "—")}</b></div>
@@ -2936,6 +3192,67 @@ groupForm.addEventListener("submit", async (e) => {
 $("#groupCancelBtn").addEventListener("click", () => groupDlg.close());
 bindBackdropClose(groupDlg);
 enhanceDialog(groupDlg, "#groupNameInput");
+
+/* ── 静默安装参数面板 ── */
+bindBackdropClose(silentDlg);
+enhanceDialog(silentDlg);
+
+listEl.addEventListener("click", (e) => {
+  const btn = e.target.closest(".silent-btn");
+  if (btn) {
+    e.preventDefault();
+    openSilentDialog(btn.dataset.id);
+  }
+});
+
+silentDlg.addEventListener("click", (e) => {
+  // 板块内 cmd / PowerShell 切换
+  const tab = e.target.closest(".silent-tab");
+  if (tab) {
+    const secEl = tab.closest(".silent-sec");
+    secEl.querySelectorAll(".silent-tab").forEach((b) => b.classList.toggle("active", b === tab));
+    secEl.querySelectorAll(".silent-code").forEach((pre) => pre.classList.toggle("hidden", pre.dataset.lang !== tab.dataset.lang));
+    return;
+  }
+  // 命令块右上角复制
+  const codeCopy = e.target.closest(".silent-copy");
+  if (codeCopy) {
+    const pre = codeCopy.closest(".silent-code");
+    if (pre) copyDlValue(pre.dataset.raw || "");
+    return;
+  }
+  // 校验值文本框复制
+  const valCopy = e.target.closest(".dl-copy");
+  if (valCopy && valCopy.dataset.copy) copyDlValue(valCopy.dataset.copy);
+});
+
+$("#silentCloseBtn").addEventListener("click", () => silentDlg.close());
+$("#silentEditBtn").addEventListener("click", () => {
+  const app = apps.find((x) => x.id === silentAppId);
+  if (!app) return;
+  silentDraft = JSON.parse(JSON.stringify(silentContentFor(app)));
+  silentEditing = true;
+  renderSilentBody();
+});
+$("#silentSaveBtn").addEventListener("click", async () => {
+  if (!silentEditing || !silentAppId) return;
+  const collect = (sec) => ({
+    cmd: silentDlg.querySelector(`textarea[data-sec="${sec}"][data-kind="cmd"]`).value.slice(0, 2000),
+    powershell: silentDlg.querySelector(`textarea[data-sec="${sec}"][data-kind="powershell"]`).value.slice(0, 2000),
+  });
+  try {
+    const updated = await api("/api/apps/" + silentAppId, {
+      method: "PUT",
+      body: { silentInstall: { install: collect("install"), update: collect("update"), uninstall: collect("uninstall") } },
+    });
+    apps = apps.map((a) => (a.id === updated.id ? updated : a));
+    silentEditing = false;
+    renderSilentBody();
+    toast(t("saved"));
+  } catch (e) {
+    toast(e.message, "error");
+  }
+});
 
 async function createGroup() {
   openGroupDialog("create");
