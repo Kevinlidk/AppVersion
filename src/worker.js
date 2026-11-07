@@ -1073,10 +1073,10 @@ async function fetchChocolateyLatest(packageId) {
  * (顶层键值、`InstallerType: x` 默认值、`Installers:` 列表)。
  * 不引入依赖,仅提取 Architecture / InstallerUrl / InstallerType / Scope。
  */
-/** SHA-256 规范化:64 位十六进制(转小写);不合法返回空串 */
+/** SHA-256 规范化:64 位十六进制(统一大写,与 winget-pkgs 清单一致);不合法返回空串 */
 function normalizeSha256(v) {
-  const s = String(v ?? "").trim().toLowerCase();
-  return /^[0-9a-f]{64}$/.test(s) ? s : "";
+  const s = String(v ?? "").trim().toUpperCase();
+  return /^[0-9a-f]{64}$/i.test(s) ? s : "";
 }
 
 /**
