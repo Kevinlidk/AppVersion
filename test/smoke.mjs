@@ -938,6 +938,54 @@ await test("cisco 渠道:页面结构异常时给出明确错误", async () => {
   await call("/api/apps/" + a.id, { method: "DELETE" });
 });
 
+/* ── 检查分批:应用多于批大小时,分多次调用并聚合通知 ── */
+
+await test("check 分批:通知在最后一批聚合发送,进度走 KV", async () => {
+  const envB = { APP_KV: makeKV(), CHECK_GAP_MS: "1", CHECK_BATCH_SIZE: "2",
+                 NOTIFY_WEBHOOK_URL: "https://notify.example/hook", ADMIN_PASSWORD: "pb" };
+  hookCalls.length = 0;
+  const { cookie: ckb } = await loginAs(envB, "pb");
+  const callB = (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}) };
+    headers.cookie = "av_session=" + ckb;
+    return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), envB, ctx);
+  };
+  // 3 个应用,批大小 2 → 两批;A/C 有更新且开启通知,B 无更新
+  await callB("/api/apps", post({ name: "分批A", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true }));
+  await callB("/api/apps", post({ name: "分批B", channel: "github", repo: "foo/bar", version: "v2.0.0", notify: true }));
+  await callB("/api/apps", post({ name: "分批C", channel: "github", repo: "foo/bar", version: "1.0.0", notify: true }));
+
+  // 第一批:done=false,携带 runId 与 nextBatch
+  const first = await bodyOf(await callB("/api/check", { method: "POST" }));
+  assertEq(first.done, false, "第一批未结束");
+  assertEq(first.batches, 2, "共两批");
+  assertEq(first.batch, 0, "批次序号");
+  assertEq(first.checked, 2, "第一批检查数");
+  if (!first.runId) throw new Error("缺少 runId");
+
+  // 第二批(最后):done=true,聚合并推送两条更新
+  const second = await bodyOf(await callB("/api/check?run=" + first.runId + "&batch=" + first.nextBatch, { method: "POST" }));
+  assertEq(second.done, true, "最后一批结束");
+  assertEq(second.checked, 3, "累计检查数");
+  assertEq(second.notified, true, "聚合推送");
+  assertEq(second.updates.length, 2, "两条更新聚合为一条消息");
+  assertEq(second.errors.length, 0, "无错误");
+
+  assertEq(hookCalls.length, 1, "推送次数");
+  const payload = JSON.parse(hookCalls[0].body);
+  assertEq(payload.apps.length, 2, "推送应用数");
+  const names = payload.apps.map((x) => x.name).sort().join(",");
+  assertEq(names, "分批A,分批C", "推送对象(A 与 C)");
+
+  // 通知标记已落库:再查一遍不应重复推送
+  const again = await bodyOf(await callB("/api/check", { method: "POST" }));
+  assertEq(again.updated, 0, "无重复推送");
+
+  // 错误的续跑参数 → 409/410
+  const bad = await callB("/api/check?run=nonexistent&batch=1", { method: "POST" });
+  assertEq(bad.status, 410, "不存在的运行返回 410");
+});
+
 /* ── winget：嵌套分组目录 + last commit date ── */
 
 await test("winget:分组目录(2020/)下的真实版本被正确展开", async () => {

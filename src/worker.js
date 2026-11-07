@@ -63,6 +63,8 @@ const SESSION_TTL = 604800; // 会话有效期:7 天
 const LOGIN_MAX_FAILS = 10; // 登录失败锁定阈值
 const LOGIN_LOCK_TTL = 900; // 锁定时长:15 分钟
 const CHECK_LOCK_KEY = "check:lock"; // 定时检查并发锁
+const CHECK_RUN_KEY_PREFIX = "check:run:"; // 分批检查的运行进度前缀
+const CHECK_RUN_TTL = 900; // 运行进度保留 15 分钟(跨多批)
 
 /** 业务类错误,携带 HTTP 状态码 */
 class ApiError extends Error {
@@ -189,6 +191,7 @@ async function authorizedForCheck(env, request) {
 
 /* ─────────────── KV 存取 ─────────────── */
 
+const kvWrapped = new WeakMap();
 function kv(env) {
   if (!env || !env.APP_KV) {
     throw new ApiError(
@@ -196,7 +199,17 @@ function kv(env) {
       500
     );
   }
-  return env.APP_KV;
+  // KV 读写同样计入 Cloudflare 的子请求配额,统一走预算计数器
+  const raw = env.APP_KV;
+  if (kvWrapped.has(raw)) return kvWrapped.get(raw);
+  const wrapped = {
+    async get(k) { subrequestTick(); return raw.get(k); },
+    async put(k, v, o) { subrequestTick(); return raw.put(k, v, o); },
+    async delete(k) { subrequestTick(); return raw.delete(k); },
+  };
+  if (raw.list) wrapped.list = (...a) => raw.list(...a);
+  kvWrapped.set(raw, wrapped);
+  return wrapped;
 }
 
 async function readApps(env) {
@@ -1659,54 +1672,135 @@ async function sendNotifications(env, found) {
  * 聚合成一条消息推送,成功后记录 notifiedVersion 防止重复推送。
  * @returns {{checked:number,updated:number,notified:boolean,updates:object[],errors:object[]}}
  */
-async function runUpdateCheck(env) {
-  // 批量检查从零计子请求预算,并禁用可选增强(发布日期),
-  // 确保 20+ 应用也不会击穿 Cloudflare 单次调用 50 个子请求的上限
+async function runUpdateCheck(env, run = null) {
+  // 批量检查从零计子请求预算(KV 与 fetch 都计数)
   subrequestsUsed = 0;
   const list = await readApps(env);
-  // 定时检查覆盖全部自动渠道应用(让页面版本/检查时间始终保持新鲜);
-  // notify 只决定「发现更新时是否推送」,不影响是否检查。
   const targets = list.filter((a) => a.channel !== "manual");
+  const batchSize = Math.max(1, Number(env.CHECK_BATCH_SIZE) || 10);
+  const batches = Math.max(1, Math.ceil(targets.length / batchSize));
   const gap = env.CHECK_GAP_MS !== undefined ? Number(env.CHECK_GAP_MS) : 500;
+
+  /* 应用数超过单批容量时启用分批:进度存 KV(check:run:<id>),
+     调用方(GitHub Actions)循环携带 run/batch 继续下一批,
+     每批都是独立的 Worker 调用、享有独立的子请求配额。
+     通知在最后一批聚合并发送,「所有更新合并为一条消息」不变。 */
+  const multiBatch = Boolean(run) || batches > 1;
+  let progress = null;
+  if (multiBatch) {
+    if (run) {
+      const raw = await kv(env).get(CHECK_RUN_KEY_PREFIX + run.id);
+      if (!raw) throw new ApiError("检查运行已过期或不存在,请重新发起检查", 410);
+      progress = JSON.parse(raw);
+      if (progress.nextBatch !== run.batch) {
+        throw new ApiError(
+          progress.nextBatch > run.batch ? "该批次已处理完毕" : "批次顺序不正确,请按 nextBatch 继续", 409
+        );
+      }
+    } else {
+      progress = {
+        id: crypto.randomUUID(), batches, total: targets.length,
+        checked: 0, found: [], errors: [], nextBatch: 0,
+      };
+      await kv(env).put(CHECK_RUN_KEY_PREFIX + progress.id, JSON.stringify(progress), { expirationTtl: CHECK_RUN_TTL });
+    }
+  }
+
+  const batchIndex = progress ? progress.nextBatch : 0;
+  const slice = targets.slice(batchIndex * batchSize, batchIndex * batchSize + batchSize);
 
   const found = [];
   const errors = [];
-  for (const app of targets) {
+  for (const app of slice) {
     try {
       const latest = await fetchLatest(app, env, { dateMode: "off" });
       applyLatest(app, latest);
       if (
         latest.version &&
         latest.version !== app.notifiedVersion &&
-        // 仅当最新版本严格高于当前版本才算有更新:当前版本更高时
-        // (手动填了新版本 / 上游回退 release)不推送,避免误报
         (!app.version || compareVersions(latest.version, app.version) > 0)
       ) {
         found.push({ app, version: latest.version });
       }
     } catch (e) {
-      const message = (e && e.message) || String(e);
+      const message = String((e && e.message) || e);
       errors.push({ name: app.name, channel: app.channel, error: message });
       console.log(`[check] ${app.name}(${app.channel}): ${message}`);
     }
     if (gap > 0) await sleep(gap);
   }
 
-  // 只有开启通知的应用才推送(以及记录 notifiedVersion 防重复)
-  const toNotify = found.filter((f) => f.app.notify !== false);
+  if (!multiBatch) {
+    // 单批跑完(应用数 ≤ 批大小):行为与旧版完全一致
+    const toNotify = found.filter((f) => f.app.notify !== false);
+    let notified = false;
+    if (toNotify.length) {
+      notified = await sendNotifications(env, toNotify);
+      if (notified) for (const f of toNotify) f.app.notifiedVersion = f.version;
+    }
+    await writeApps(env, list);
+    return {
+      checked: targets.length,
+      updated: found.length,
+      notified,
+      updates: found.map((f) => ({ name: f.app.name, version: f.version })),
+      errors,
+      batches: 1,
+      batch: 0,
+      done: true,
+    };
+  }
+
+  // ── 批量模式:累加进度 ──
+  progress.checked += slice.length;
+  progress.found.push(...found.map((f) => ({ id: f.app.id, name: f.app.name, version: f.version })));
+  progress.errors.push(...errors);
+  progress.nextBatch = batchIndex + 1;
+  const isLast = progress.nextBatch >= progress.batches;
+
+  if (!isLast) {
+    await kv(env).put(CHECK_RUN_KEY_PREFIX + progress.id, JSON.stringify(progress), { expirationTtl: CHECK_RUN_TTL });
+    return {
+      checked: progress.checked,
+      updated: progress.found.length,
+      notified: false,
+      updates: progress.found.map((f) => ({ name: f.name, version: f.version })),
+      errors: progress.errors,
+      runId: progress.id,
+      batches: progress.batches,
+      batch: batchIndex,
+      nextBatch: progress.nextBatch,
+      done: false,
+    };
+  }
+
+  // ── 最后一批:重新校验(应用可能在中途被手动刷新),聚合并推送 ──
+  const pending = [];
+  for (const f of progress.found) {
+    const app = list.find((x) => x.id === f.id);
+    if (!app) continue;                                  // 中途被删除
+    if (app.notifiedVersion === f.version) continue;     // 中途被手动刷新
+    if (app.version && compareVersions(f.version, app.version) <= 0) continue;
+    if (app.notify === false) continue;                  // 通知已关闭
+    pending.push({ app, version: f.version });
+  }
   let notified = false;
-  if (toNotify.length) {
-    notified = await sendNotifications(env, toNotify);
-    if (notified) for (const f of toNotify) f.app.notifiedVersion = f.version;
+  if (pending.length) {
+    notified = await sendNotifications(env, pending);
+    if (notified) for (const f of pending) f.app.notifiedVersion = f.version;
   }
   await writeApps(env, list);
+  await kv(env).delete(CHECK_RUN_KEY_PREFIX + progress.id);
 
   return {
-    checked: targets.length,
-    updated: found.length,
+    checked: progress.checked,
+    updated: pending.length,
     notified,
-    updates: found.map((f) => ({ name: f.app.name, version: f.version })),
-    errors,
+    updates: pending.map((f) => ({ name: f.app.name, version: f.version })),
+    errors: progress.errors,
+    batches: progress.batches,
+    batch: batchIndex,
+    done: true,
   };
 }
 
@@ -1861,16 +1955,36 @@ async function handleApi(request, env, pathname) {
       throw new ApiError("需要有效的 CRON_SECRET 或管理员登录", 401);
     }
     const store = kv(env);
-    if (await store.get(CHECK_LOCK_KEY)) {
+    const url = new URL(request.url);
+    const runId = url.searchParams.get("run") || "";
+    const batchRaw = url.searchParams.get("batch");
+    const continuing = Boolean(runId);
+    let batch = 0;
+    if (continuing) {
+      batch = Number(batchRaw);
+      if (!Number.isInteger(batch) || batch < 1) {
+        throw new ApiError("batch 参数不正确,应为从 1 开始的批次序号", 400);
+      }
+    } else if (await store.get(CHECK_LOCK_KEY)) {
       throw new ApiError("已有检查任务在执行中,请稍后重试", 409);
     }
-    // 并发锁:防止 workflow 与手动触发重叠执行,异常时 5 分钟自动过期
-    await store.put(CHECK_LOCK_KEY, nowIso(), { expirationTtl: 300 });
+    // 并发锁:新运行时获取,批量运行期间持有(15 分钟 TTL 兜底),
+    // 单批跑完或出错时释放 —— 续跑请求携带 runId 即可证明身份,不查锁
+    if (!continuing) await store.put(CHECK_LOCK_KEY, nowIso(), { expirationTtl: 900 });
+    let summary = null;
+    let failed = false;
     try {
-      return json({ ok: true, ...(await runUpdateCheck(env)) });
+      summary = await runUpdateCheck(env, continuing ? { id: runId, batch } : null);
+    } catch (e) {
+      failed = true;
+      throw e;
     } finally {
-      try { await store.delete(CHECK_LOCK_KEY); } catch { /* 释放失败交给 TTL */ }
+      // 出错或已跑完时释放锁;批量进行中则保留,防止其他触发重叠
+      if (failed || !summary || summary.done) {
+        try { await store.delete(CHECK_LOCK_KEY); } catch { /* 释放失败交给 TTL */ }
+      }
     }
+    return json({ ok: true, ...summary });
   }
 
   /* ── 查看类接口(公开,访客只读)── */

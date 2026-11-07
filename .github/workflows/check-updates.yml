@@ -49,30 +49,47 @@ jobs:
             exit 1
           fi
 
-          url="${APP_VERSION_URL%/}/api/check"
-          echo "POST $url"
+          # 分批检查:应用多于批大小时,Worker 一次只查一批并返回
+          # runId / nextBatch / done=false,这里循环调用直到 done=true。
+          # 每批都是独立的 Worker 调用、享有独立的 50 个子请求配额,
+          # 因此应用数量可以不受单次调用限制地持续增长。
+          run_id=""
+          batch=""
+          for i in $(seq 1 40); do
+            if [ -z "$run_id" ]; then
+              url="${APP_VERSION_URL%/}/api/check"
+            else
+              url="${APP_VERSION_URL%/}/api/check?run=${run_id}&batch=${batch}"
+            fi
+            echo "POST $url"
 
-          # --fail-with-body: 非 2xx 时让步骤失败,同时保留响应体便于排查
-          http_code=$(curl -sS --fail-with-body -m 120 -o response.json -w "%{http_code}" \
-            -X POST "$url" \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
-            -H "content-type: application/json" \
-            --retry 3 --retry-delay 5 --retry-connrefused) || {
-              code=$?
-              echo "::error::调用失败(curl 退出码 $code)"
-              cat response.json 2>/dev/null || true
-              exit 1
-            }
+            # --fail-with-body: 非 2xx 时让步骤失败,同时保留响应体便于排查
+            http_code=$(curl -sS --fail-with-body -m 120 -o "response-$i.json" -w "%{http_code}"               -X POST "$url"               -H "Authorization: Bearer ${CRON_SECRET}"               -H "content-type: application/json"               --retry 3 --retry-delay 5 --retry-connrefused) || {
+                code=$?
+                echo "::error::调用失败(curl 退出码 $code)"
+                cat "response-$i.json" 2>/dev/null || true
+                exit 1
+              }
 
-          echo "HTTP $http_code"
-          cat response.json
-          echo
-
-          # 把摘要写入 job summary,便于在 Actions 页面直接查看
-          {
-            echo "## 应用更新检查结果"
+            echo "HTTP $http_code"
+            cat "response-$i.json"
             echo
-            echo '```json'
-            cat response.json
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+
+            {
+              echo "## 应用更新检查结果(第 $i 批)"
+              echo
+              echo '```json'
+              cat "response-$i.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            done_flag=$(jq -r '.done // true' "response-$i.json")
+            if [ "$done_flag" = "true" ]; then break; fi
+            run_id=$(jq -r '.runId // empty' "response-$i.json")
+            batch=$(jq -r '.nextBatch // empty' "response-$i.json")
+            if [ -z "$run_id" ] || [ -z "$batch" ]; then
+              echo "::error::响应缺少 runId/nextBatch,无法继续分批检查"
+              exit 1
+            fi
+            sleep 2
+          done
