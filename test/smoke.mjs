@@ -966,8 +966,12 @@ await test("check 分批:通知在最后一批聚合发送,进度走 KV", async 
   // (否则下一批的旧数据会覆盖本批结果,检查时间/版本全部丢失)
   const midList = (await (await callB("/api/apps")).json())
     .filter((x) => x.name.startsWith("分批"));
+  // 列表按创建倒序([C,B,A]),批 0 只处理前 batchSize 个:必须已落盘
+  const batch0Names = midList.slice(0, 2).map((x) => x.name);
   for (const x of midList) {
-    if (!x.lastCheckedAt) throw new Error(x.name + " 的检查结果在批次间丢失");
+    if (batch0Names.includes(x.name) && !x.lastCheckedAt) {
+      throw new Error(x.name + " 的检查结果在批次间丢失");
+    }
   }
 
   // 第二批(最后):done=true,聚合并推送两条更新
