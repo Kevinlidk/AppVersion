@@ -962,6 +962,13 @@ await test("check 分批:通知在最后一批聚合发送,进度走 KV", async 
   assertEq(first.batch, 0, "批次序号");
   assertEq(first.checked, 2, "第一批检查数");
   if (!first.runId) throw new Error("缺少 runId");
+  // 关键回归点:非最后一批也必须把应用状态写回 KV
+  // (否则下一批的旧数据会覆盖本批结果,检查时间/版本全部丢失)
+  const midList = (await (await callB("/api/apps")).json())
+    .filter((x) => x.name.startsWith("分批"));
+  for (const x of midList) {
+    if (!x.lastCheckedAt) throw new Error(x.name + " 的检查结果在批次间丢失");
+  }
 
   // 第二批(最后):done=true,聚合并推送两条更新
   const second = await bodyOf(await callB("/api/check?run=" + first.runId + "&batch=" + first.nextBatch, { method: "POST" }));

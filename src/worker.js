@@ -1711,10 +1711,12 @@ async function runUpdateCheck(env, run = null) {
 
   const found = [];
   const errors = [];
+  console.log("[trace] batch", batchIndex, "slice=", slice.map((a) => a.name), "targets=", targets.length, "listLen=", list.length);
   for (const app of slice) {
     try {
       const latest = await fetchLatest(app, env, { dateMode: "off" });
       applyLatest(app, latest);
+      console.log("[trace] ok:", app.name, "checkedAt=", app.lastCheckedAt, "latest=", app.latestVersion);
       if (
         latest.version &&
         latest.version !== app.notifiedVersion &&
@@ -1751,7 +1753,10 @@ async function runUpdateCheck(env, run = null) {
     };
   }
 
-  // ── 批量模式:累加进度 ──
+  // ── 批量模式:落盘本批结果,累加进度 ──
+  // 关键:每批都必须把应用列表写回 KV —— 下一批是独立的调用,
+  // 会重新 readApps,漏写会导致本批的更新被下一批的旧数据覆盖。
+  await writeApps(env, list);
   progress.checked += slice.length;
   progress.found.push(...found.map((f) => ({ id: f.app.id, name: f.app.name, version: f.version })));
   progress.errors.push(...errors);
