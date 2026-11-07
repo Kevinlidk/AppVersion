@@ -483,7 +483,6 @@
   /* 卡片右下角下载按钮 */
   .card { position: relative; }
   .card-download {
-    position: absolute; right: 12px; bottom: 10px;
     display: inline-flex; align-items: center; justify-content: center;
     width: 30px; height: 30px; border-radius: 8px;
     border: none; padding: 0; cursor: pointer;
@@ -493,13 +492,20 @@
   .card-download:hover { background: var(--accent); color: #fff; }
   .card-download:active { transform: scale(.92); }
   .card-download[aria-expanded="true"] { background: var(--accent); color: #fff; }
-  /* 有下载按钮时给操作区留出空间,避免按钮重叠 */
-  .card:has(.card-download) .card-actions { padding-right: 34px; }
+  /* 底部动作行:静默参数图标 + 下载图标,居于卡片右下角 */
+  .card-bottom-actions {
+    position: absolute; right: 12px; bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .card:has(.card-download) .card-actions { padding-right: 62px; }
+  .card:has(.silent-btn):not(:has(.card-download)) .card-actions { padding-right: 32px; }
+  .dl-wrap { position: static; }
+  .dl-wrap .card-download { position: static; }
   /* 上移/下移始终作为一个整体,永远不会被拆到两行 */
   .move-pair { display: inline-flex; gap: 6px; flex-shrink: 0; }
 
   /* ── 下载候选菜单 ── */
-  .dl-wrap { position: absolute; right: 12px; bottom: 10px; }
+  .dl-wrap { position: static; }
   .dl-wrap .card-download { position: static; }
   .dl-menu {
     position: absolute; right: 0; bottom: calc(100% + 8px);
@@ -2235,10 +2241,7 @@ function cardHtml(a) {
           ${iconHtml(a)}
           ${nameHtml(a)}
         </div>
-        <div class="card-top-actions">
-          ${silentBtnHtml(a)}
-          ${badgeOf(a)}
-        </div>
+        ${badgeOf(a)}
       </div>
       <div class="ver">
         <div><span class="ver-label">${manual ? t("ver_version") : t("ver_current")}</span><b>${esc(a.version || "—")}</b></div>
@@ -2247,7 +2250,10 @@ function cardHtml(a) {
       <div class="meta">${meta.join('<span aria-hidden="true">·</span>')}</div>
       ${a.note ? `<p class="note">${esc(a.note)}</p>` : ""}
       ${actions}
-      ${downloadBtnHtml(a)}
+      <div class="card-bottom-actions">
+        ${silentBtnHtml(a)}
+        ${downloadBtnHtml(a)}
+      </div>
     </article>`;
 }
 
