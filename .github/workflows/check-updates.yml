@@ -83,10 +83,10 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
-            done_flag=$(jq -r '.done // true' "response-$i.json")
+            done_flag=$(jq -r '.done == true' "response-$i.json")
             if [ "$done_flag" = "true" ]; then break; fi
-            run_id=$(jq -r '.runId // empty' "response-$i.json")
-            batch=$(jq -r '.nextBatch // empty' "response-$i.json")
+            run_id=$(jq -r '.runId // ""' "response-$i.json")
+            batch=$(jq -r '.nextBatch // ""' "response-$i.json")
             if [ -z "$run_id" ] || [ -z "$batch" ]; then
               echo "::error::响应缺少 runId/nextBatch,无法继续分批检查"
               exit 1
