@@ -846,9 +846,25 @@ async function fetchGitHubLatest(repo, env) {
  * 网络级重试:仅对连接异常与 5xx 重试。
  * 429/403 明确不重试 —— 重试只会加重限流甚至触发更长的封禁。
  */
+/* ── 子请求预算 ──────────────────────────────────────────────
+   Cloudflare Workers 免费版限制单次调用最多 50 个 fetch 子请求。
+   一次 /api/check 要查 20+ 个应用,必须省着用:核心请求(清单列表、
+   installer.yaml)优先,可选增强(发布日期等)只在预算充裕时发出。
+   计数器在每次检查/单应用刷新开始时清零。 */
+const SUBREQUEST_SOFT_LIMIT = 42;
+let subrequestsUsed = 0;
+function subrequestTick() {
+  subrequestsUsed += 1;
+  return subrequestsUsed;
+}
+function subrequestBudgetOk(need = 1) {
+  return subrequestsUsed + need <= SUBREQUEST_SOFT_LIMIT;
+}
+
 async function fetchWithRetry(url, opts, attempts = 3) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
+    subrequestTick();
     try {
       const res = await fetch(url, opts);
       if (res.status >= 500 && i < attempts - 1) {
@@ -857,6 +873,11 @@ async function fetchWithRetry(url, opts, attempts = 3) {
       }
       return res;
     } catch (e) {
+      const msg = String((e && e.message) || e);
+      // 平台子请求配额用尽:重试无意义,直接给出明确错误
+      if (msg.includes("Too many subrequests")) {
+        throw new ApiError("本次检查触达平台子请求上限(Cloudflare 单次调用 50 个),其余应用将在下个周期自动重试", 502);
+      }
       lastErr = e;
       if (i < attempts - 1) await sleep(300 * (i + 1));
     }
@@ -1222,47 +1243,50 @@ async function wingetVersionCommitDate(pkgDir, versionPath, env) {
 }
 
 /**
- * 选出版本目录中的最新一条。
- * 先按版本号降序取前若干候选,再**用 last commit date 判定**最新:
- * 清单仓库每次发布新版本都会新增一次提交,日期比版本字符串更可靠
- * (能兼容 2020 这类分组目录、以及版本号命名不规范的包)。
- * 日期全部取不到时回退到版本号比较。返回 {version, path, publishedAt}。
+ * 选出版本目录中的最新一条,返回 {version, path, publishedAt}。
+ *
+ * 主判定是**版本号比较** —— 配合上面的分组展开与子包排除,它已经能
+ * 正确处理 Adobe(2020 分组)和 TeamViewer(Host/QuickSupport 子包)。
+ * last commit date 降级为两种受限用法(每个请求都要计入子请求预算):
+ *   1. 单应用手动刷新时,给胜出版本取一次提交时间作为 publishedAt;
+ *   2. 版本目录走了「下钻兜底」、命名不可信时,取前 2 名的提交时间
+ *      重新排序(谁提交得新谁算最新)。
+ * 定时批量检查默认关闭日期抓取 —— 20+ 应用 × N 个日期请求会击穿
+ * Cloudflare 单次调用 50 个子请求的平台上限。
  */
-const WINGET_DATE_CANDIDATES = 5;
-
-async function pickWingetLatest(pkgDir, versions, env) {
+async function pickWingetLatest(pkgDir, versions, env, { dateMode = "off" } = {}) {
   const byVersion = [...versions].sort((a, b) => compareVersions(a.version, b.version));
-  const top = byVersion.slice(-WINGET_DATE_CANDIDATES);
-  if (top.length === 1) {
-    const only = top[0];
-    return { ...only, publishedAt: await wingetVersionCommitDate(pkgDir, only.path, env) };
+  const winner = byVersion[byVersion.length - 1];
+  const allStrict = versions.every((v) => WINGET_VERSION_RE.test(v.version));
+
+  // 兜底路径:命名不可信时,用前 2 名的提交时间重排(预算内才发)
+  if (!allStrict && subrequestBudgetOk(2)) {
+    const top2 = byVersion.slice(-2);
+    const dated = [];
+    for (const v of top2) {
+      const date = await wingetVersionCommitDate(pkgDir, v.path, env);
+      if (date) dated.push({ ...v, publishedAt: date });
+    }
+    if (dated.length) {
+      dated.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+      return dated[0];
+    }
   }
-  const withDates = await Promise.all(
-    top.map(async (v) => ({
-      ...v,
-      publishedAt: await wingetVersionCommitDate(pkgDir, v.path, env),
-    }))
-  );
-  const dated = withDates.filter((v) => v.publishedAt);
-  if (dated.length) {
-    dated.sort((a, b) => {
-      const ta = Date.parse(a.publishedAt);
-      const tb = Date.parse(b.publishedAt);
-      if (ta !== tb) return tb - ta;                        // 提交时间新的优先
-      return compareVersions(b.version, a.version);          // 同时间按版本号兜底
-    });
-    return dated[0];
+
+  // 常规路径:版本号最大者胜;允许时补一条提交时间作为发布日期
+  if (dateMode === "always" && subrequestBudgetOk(1)) {
+    const publishedAt = await wingetVersionCommitDate(pkgDir, winner.path, env);
+    return { ...winner, publishedAt: publishedAt || null };
   }
-  // 日期取不到(限流/无提交记录):回退到版本号最大的
-  return { ...byVersion[byVersion.length - 1], publishedAt: null };
+  return { ...winner, publishedAt: null };
 }
 
-async function fetchWingetLatest(packageId, env) {
+async function fetchWingetLatest(packageId, env, opts = {}) {
   const parts = packageId.split(".");
   const dir = `manifests/${packageId[0].toLowerCase()}/${parts[0]}/${parts.slice(1).join("/")}`;
 
   const versions = await listWingetVersions(dir, env);
-  const latest = await pickWingetLatest(dir, versions, env);
+  const latest = await pickWingetLatest(dir, versions, env, { dateMode: opts.dateMode || "off" });
 
   // 读取该版本的 installer.yaml,取出各架构下载地址作为下载候选。
   // 若该路径下没有本包的 installer.yaml(目录结构与预期不符),依次回退到
@@ -1529,10 +1553,10 @@ function pickDownloadAsset(assets) {
 }
 
 /** 按应用渠道分发查询;manual 渠道不支持自动查询 */
-async function fetchLatest(app, env) {
+async function fetchLatest(app, env, opts = {}) {
   if (app.channel === "github" && app.repo) return fetchGitHubLatest(app.repo, env);
   if (app.channel === "chocolatey" && app.packageId) return fetchChocolateyLatest(app.packageId);
-  if (app.channel === "winget" && app.packageId) return fetchWingetLatest(app.packageId, env);
+  if (app.channel === "winget" && app.packageId) return fetchWingetLatest(app.packageId, env, opts);
   if (app.channel === "official") {
     // 预设型官方源(如 Cisco)走各自的专用抓取器
     const preset = app.officialPreset ? findOfficialPreset(app.officialPreset) : null;
@@ -1636,6 +1660,9 @@ async function sendNotifications(env, found) {
  * @returns {{checked:number,updated:number,notified:boolean,updates:object[],errors:object[]}}
  */
 async function runUpdateCheck(env) {
+  // 批量检查从零计子请求预算,并禁用可选增强(发布日期),
+  // 确保 20+ 应用也不会击穿 Cloudflare 单次调用 50 个子请求的上限
+  subrequestsUsed = 0;
   const list = await readApps(env);
   // 定时检查覆盖全部自动渠道应用(让页面版本/检查时间始终保持新鲜);
   // notify 只决定「发现更新时是否推送」,不影响是否检查。
@@ -1646,7 +1673,7 @@ async function runUpdateCheck(env) {
   const errors = [];
   for (const app of targets) {
     try {
-      const latest = await fetchLatest(app, env);
+      const latest = await fetchLatest(app, env, { dateMode: "off" });
       applyLatest(app, latest);
       if (
         latest.version &&
@@ -1952,8 +1979,9 @@ async function handleApi(request, env, pathname) {
     delete app.lastCheckedAt;
     delete app.notifiedVersion;
     // 用新渠道立刻取一次版本
+    subrequestsUsed = 0;
     try {
-      const latest = await fetchLatest(app, env);
+      const latest = await fetchLatest(app, env, { dateMode: "always" });
       applyLatest(app, latest);
       app.notifiedVersion = latest.version;
     } catch { /* 查询失败不影响转换本身,用户可稍后手动刷新 */ }
@@ -1967,7 +1995,8 @@ async function handleApi(request, env, pathname) {
     const list = await readApps(env);
     const app = list.find((a) => a.id === m[1]);
     if (!app) throw new ApiError("应用不存在", 404);
-    const latest = await fetchLatest(app, env);
+    subrequestsUsed = 0;   // 单应用刷新预算充足,可以带上发布日期
+    const latest = await fetchLatest(app, env, { dateMode: "always" });
     applyLatest(app, latest);
     // 手动刷新视为已知悉,定时任务不再重复推送该版本
     app.notifiedVersion = latest.version;
