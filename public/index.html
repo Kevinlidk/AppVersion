@@ -1166,6 +1166,8 @@ const I18N = {
     silent_ref: "参考:",
     silent_ref_title: "silentinstalls.com — 各类应用的静默安装参数参考",
     silent_values_title: "校验值与标识",
+    silent_result_ok: "{name}成功",
+    silent_result_fail: "{name}失败(退出码 {code})",
     silent_copy_cmd: "复制命令",
     silent_val_id: "包 ID",
     silent_none: "此应用暂无静默参数,管理员登录后可编辑填写",
@@ -1409,6 +1411,8 @@ const I18N = {
     silent_ref: "Reference:",
     silent_ref_title: "silentinstalls.com — silent install switch reference for popular apps",
     silent_values_title: "Checksums & identifiers",
+    silent_result_ok: "{name} succeeded",
+    silent_result_fail: "{name} failed (exit code {code})",
     silent_copy_cmd: "Copy command",
     silent_val_id: "Package ID",
     silent_none: "No silent parameters for this app yet — sign in as admin to edit",
@@ -1560,6 +1564,8 @@ function setLang(l) {
   applyStaticI18n();
   applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   if (typeof dlg !== "undefined" && dlg.open) syncChannelUi();
+  // 静默参数面板打开时重绘,回显文案跟随新语言(编辑态跳过,避免打断)
+  if (typeof silentDlg !== "undefined" && silentDlg.open && !silentEditing) renderSilentBody();
   renderAdminUi();
 }
 
@@ -2010,9 +2016,9 @@ function silentBtnHtml(a) {
     `title="${esc(t("silent_btn_title"))}" aria-label="${esc(t("silent_btn_title"))}">${svg}</button>`;
 }
 
-/** 板块中文名:用于生成命令回显文案(模板生成与语言无关,固定中文) */
-function secLabelZh(key) {
-  return key === "install" ? "安装" : key === "update" ? "更新" : "卸载";
+/** 板块名:模板回显文案与界面语言保持一致 */
+function secLabel(key) {
+  return t("sec_" + key);
 }
 
 /** 三板块内容:应用已存的编辑值优先;winget 渠道空板块按包 ID 生成模板 */
@@ -2045,9 +2051,10 @@ function silentContentFor(app) {
       }
       // cmd 保持纯净命令;PowerShell 追加退出码判断(PS 惯用写法,cmd 不支持该语法),
       // 让 cmd / PowerShell 两个标签各有实际差异。
+      const secName = secLabel(key);
       cmd = cmdT;
       ps = cmdT + `
-if ($LASTEXITCODE -eq 0) { "${secLabelZh(key)}成功" } else { "${secLabelZh(key)}失败(退出码 $LASTEXITCODE)" }`;
+if ($LASTEXITCODE -eq 0) { "${t("silent_result_ok", { name: secName })}" } else { "${t("silent_result_fail", { name: secName, code: "$LASTEXITCODE" })}" }`;
     }
     out[key] = { cmd, powershell: ps };
   }
