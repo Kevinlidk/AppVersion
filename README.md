@@ -191,7 +191,11 @@ npx wrangler secret put ADMIN_PASSWORD
 
 ## 定时检查(由 GitHub Actions 驱动)
 
-定时检查由仓库内的 `.github/workflows/check-updates.yml` 驱动(**不使用 Cloudflare Cron Trigger**,以节省账号的 crons 名额)。workflow 每 6 小时(UTC 00:30 / 06:30 / 12:30 / 18:30)用 `curl` 调用 Worker 的 `POST /api/check`,也支持在 Actions 页面手动运行。
+定时检查由仓库内的 `.github/workflows/check-updates.yml` 驱动(**不使用 Cloudflare Cron Trigger**,以节省账号的 crons 名额)。workflow 配置了两条错峰 cron 线(UTC `30 */6` 与 `37 2,8,14,20`,合计每 ~3 小时一个触发时点)调用 Worker 的 `POST /api/check`,也支持在 Actions 页面手动运行。
+
+**应用多于批大小时检查自动分批**:`POST /api/check` 每次调用只查一批(默认 10 个,可用环境变量 `CHECK_BATCH_SIZE` 调整),进度存 KV 并返回 `runId` / `nextBatch` / `done:false`;工作流循环调用直到 `done=true`(最多 40 批,单 Worker 免费版 50 个子请求的上限不再限制应用总数)。所有更新仍在最后一批聚合并发送为一条通知。
+
+> **GitHub schedule 的已知问题**:高峰期会延迟数分钟到数十分钟,极端情况下会**整批丢弃**某个时点(表现为该时点无运行记录)。为此配置了两条错峰 cron 线降低概率;如需绝对可靠,可用任意外部 cron 服务(cron-job.org / UptimeRobot / 腾讯云定时函数等)每 6 小时直接 POST `/api/check`(鉴权与分批协议同下文),完全绕开 GitHub Actions。
 
 **配置步骤(两步)**
 
