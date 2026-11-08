@@ -221,10 +221,14 @@ async function readApps(env) {
     // 兼容历史数据:已废弃的 cisco 渠道在读取时收敛为 official + 内置预设
     // (只在内存中迁移,写回发生在下一次保存/检查时)
     for (const it of list) {
-      if (it && it.channel === "cisco") {
+      if (!it) continue;
+      if (it.channel === "cisco") {
         it.channel = "official";
         if (!it.officialPreset) it.officialPreset = "cisco-secure-client";
       }
+      // 历史数据收敛:根路径末尾斜杠去除(仅展示层,写入时也会归一化)
+      if (typeof it.appUrl === "string" && it.appUrl) it.appUrl = stripRootSlash(it.appUrl);
+      if (typeof it.officialUrl === "string" && it.officialUrl) it.officialUrl = stripRootSlash(it.officialUrl);
     }
     return list;
   } catch {
@@ -300,6 +304,7 @@ function validateOfficialUrl(raw) {
     throw new ApiError("官方 API 地址格式不正确,应为完整 URL,如 https://example.com/api.json");
   }
   if (u.protocol !== "https:") throw new ApiError("官方 API 地址必须使用 https://");
+  // 根路径时去掉 URL API 自动补的末尾斜杠,与官网地址展示保持一致
   const host = u.hostname.toLowerCase();
   const blocked =
     host === "localhost" ||
@@ -316,7 +321,7 @@ function validateOfficialUrl(raw) {
     host === "::1" ||
     /^\[?f[cd][0-9a-f]{2}:/i.test(host);
   if (blocked) throw new ApiError("官方 API 地址不能指向内网或本机地址");
-  return u.href;
+  return stripRootSlash(u.href);
 }
 
 /** 校验自定义图标地址:公网 https 图片地址 */
@@ -350,6 +355,16 @@ function validateIconUrl(raw) {
 }
 
 /** 校验「应用官网地址」:必须是 https 公网链接 */
+/** 去除根路径末尾斜杠:https://im.qq.com/ → https://im.qq.com(URL API 会自动补斜杠)
+    仅当无真实路径时生效,带路径的 URL(如 /cn/)保持原样 */
+function stripRootSlash(href) {
+  try {
+    const u = new URL(href);
+    if (u.pathname === "/") return u.origin + u.search + u.hash;
+  } catch { /* 原样返回 */ }
+  return href;
+}
+
 function validateAppUrl(raw) {
   if (!raw) return "";
   let u;
@@ -359,7 +374,8 @@ function validateAppUrl(raw) {
     throw new ApiError("应用官网地址格式不正确,应为完整 URL(以 https:// 开头)");
   }
   if (u.protocol !== "https:") throw new ApiError("应用官网地址必须使用 https://");
-  return u.href;
+  // 根路径时去掉 URL API 自动补的末尾斜杠,展示更简洁
+  return stripRootSlash(u.href);
 }
 
 /** 归一化候选下载列表:校验 https、限长、去重、按分数降序 */

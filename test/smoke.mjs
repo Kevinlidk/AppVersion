@@ -1058,6 +1058,48 @@ await test("silentInstall:配置导出包含该字段且导入还原", async () 
   await callA("/api/apps/" + restored.id, { method: "DELETE" });
 });
 
+await test("appUrl/officialUrl:根路径末尾斜杠自动去除", async () => {
+  // 用户输入裸域名,URL API 会补上末尾斜杠 —— 存储与展示应保持无斜杠
+  const a = await bodyOf(await call("/api/apps", post({
+    name: "根路径斜杠", channel: "manual", version: "1.0.0",
+    appUrl: "https://im.qq.com/",
+  })));
+  assertEq(a.appUrl, "https://im.qq.com", "appUrl 根路径斜杠去除");
+  // 带查询参数的根路径:斜杠同样去除,参数保留
+  const b = await bodyOf(await call("/api/apps", post({
+    name: "根路径带参数", channel: "manual", version: "1.0.0",
+    appUrl: "https://im.qq.com/?tab=1",
+  })));
+  assertEq(b.appUrl, "https://im.qq.com?tab=1", "查询参数保留");
+  // 带真实路径的 URL 不受影响
+  const c = await bodyOf(await call("/api/apps", post({
+    name: "带路径", channel: "manual", version: "1.0.0",
+    appUrl: "https://www.teamviewer.com/cn/",
+  })));
+  assertEq(c.appUrl, "https://www.teamviewer.com/cn/", "真实路径的尾斜杠保留");
+
+  // officialUrl 同样去除
+  const d = await bodyOf(await call("/api/apps", post({
+    name: "官方根路径", channel: "official", officialUrl: "https://e.com/",
+    jsonPath: "releases.0.version",
+  })));
+  assertEq(d.officialUrl, "https://e.com", "officialUrl 根路径斜杠去除");
+
+  // 历史数据收敛:读取时去除已存斜杠
+  const envR = { APP_KV: makeKV(), ADMIN_PASSWORD: "pr" };
+  await envR.APP_KV.put("apps:v1", JSON.stringify([{
+    id: "legacy-slash-1", name: "历史斜杠", channel: "manual",
+    appUrl: "https://im.qq.com/", createdAt: new Date().toISOString(),
+  }]));
+  const legacy = (await bodyOf(await worker.fetch(new Request("http://localhost/api/apps"), envR, ctx)))
+    .find((x) => x.id === "legacy-slash-1");
+  assertEq(legacy.appUrl, "https://im.qq.com", "历史数据读取时去除斜杠");
+  await call("/api/apps/" + a.id, { method: "DELETE" });
+  await call("/api/apps/" + b.id, { method: "DELETE" });
+  await call("/api/apps/" + c.id, { method: "DELETE" });
+  await call("/api/apps/" + d.id, { method: "DELETE" });
+});
+
 /* ── winget：嵌套分组目录 + last commit date ── */
 
 await test("winget:分组目录(2020/)下的真实版本被正确展开", async () => {
