@@ -2020,12 +2020,23 @@ function silentContentFor(app) {
     let cmd = String(s.cmd ?? "");
     let ps = String(s.powershell ?? "");
     if (!cmd.trim() && !ps.trim() && app.channel === "winget" && app.packageId) {
-      const verb = key === "install" ? "install" : key === "update" ? "upgrade" : "uninstall";
-      const tail = verb === "uninstall"
-        ? "--exact --silent"
-        : "--exact --silent --accept-package-agreements --accept-source-agreements";
-      cmd = `winget ${verb} --id ${app.packageId} ${tail}`;
-      ps = `winget ${verb} --id "${app.packageId}" ${tail}`;
+      // 模板参数与 UniGetUI 实际执行的 winget 命令对齐(实测可用):
+      //   --source winget            固定官方源,避免其他源误命中
+      //   --disable-interactivity    禁止交互式提示(静默的关键)
+      //   --include-unknown / --force 仅升级:覆盖未知版本并强制执行
+      //   --silent 即静默安装(UniGetUI 可配置为 --interactive,此处固定静默)
+      // 机器级(machine)安装包需在管理员终端中运行,否则会触发 UAC 提权。
+      const quoted = `--id "${app.packageId}"`;
+      let cmdT;
+      if (key === "install") {
+        cmdT = `winget install ${quoted} --exact --source winget --silent --disable-interactivity --accept-package-agreements --accept-source-agreements`;
+      } else if (key === "update") {
+        cmdT = `winget upgrade ${quoted} --exact --source winget --silent --disable-interactivity --include-unknown --accept-package-agreements --accept-source-agreements --force`;
+      } else {
+        cmdT = `winget uninstall ${quoted} --source winget --silent --disable-interactivity`;
+      }
+      cmd = cmdT;
+      ps = cmdT;
     }
     out[key] = { cmd, powershell: ps };
   }
