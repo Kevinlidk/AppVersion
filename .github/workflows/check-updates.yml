@@ -16,7 +16,10 @@ name: Check app updates
 on:
   schedule:
     # 每 6 小时一次(UTC 00:30 / 06:30 / 12:30 / 18:30)
+    # GitHub 高峰期会延迟甚至丢弃 schedule 运行,错峰再加 4 个时点提高触发率;
+    # 并发锁与 notifiedVersion 防重推,多跑一次无副作用
     - cron: "30 */6 * * *"
+    - cron: "37 2,8,14,20 * * *"
   workflow_dispatch: # 支持在 Actions 页面手动运行
 
 # 同一时刻只跑一个实例,避免重叠触发造成重复检查
