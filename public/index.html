@@ -2010,6 +2010,11 @@ function silentBtnHtml(a) {
     `title="${esc(t("silent_btn_title"))}" aria-label="${esc(t("silent_btn_title"))}">${svg}</button>`;
 }
 
+/** 板块中文名:用于生成命令回显文案(模板生成与语言无关,固定中文) */
+function secLabelZh(key) {
+  return key === "install" ? "安装" : key === "update" ? "更新" : "卸载";
+}
+
 /** 三板块内容:应用已存的编辑值优先;winget 渠道空板块按包 ID 生成模板 */
 function silentContentFor(app) {
   const stored = app && app.silentInstall ? app.silentInstall : {};
@@ -2020,23 +2025,29 @@ function silentContentFor(app) {
     let cmd = String(s.cmd ?? "");
     let ps = String(s.powershell ?? "");
     if (!cmd.trim() && !ps.trim() && app.channel === "winget" && app.packageId) {
-      // 模板参数与 UniGetUI 实际执行的 winget 命令对齐(实测可用):
+      // 模板参数与 UniGetUI 实际执行的 winget 命令逐字对齐(安装/升级/卸载日志均实测可用):
       //   --source winget            固定官方源,避免其他源误命中
       //   --disable-interactivity    禁止交互式提示(静默的关键)
-      //   --include-unknown / --force 仅升级:覆盖未知版本并强制执行
+      //   --force                    安装/升级均携带,强制执行
+      //   --include-unknown          仅升级:覆盖未知版本
+      //   --version "<最新>"          仅卸载:精确卸载该版本(取应用的最新版本号)
       //   --silent 即静默安装(UniGetUI 可配置为 --interactive,此处固定静默)
       // 机器级(machine)安装包需在管理员终端中运行,否则会触发 UAC 提权。
-      const quoted = `--id "${app.packageId}"`;
+      const idQ = `--id "${app.packageId}"`;
+      const verQ = app.latestVersion ? ` --version "${app.latestVersion}"` : "";
       let cmdT;
       if (key === "install") {
-        cmdT = `winget install ${quoted} --exact --source winget --silent --disable-interactivity --accept-package-agreements --accept-source-agreements`;
+        cmdT = `winget install ${idQ} --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force`;
       } else if (key === "update") {
-        cmdT = `winget upgrade ${quoted} --exact --source winget --silent --disable-interactivity --include-unknown --accept-package-agreements --accept-source-agreements --force`;
+        cmdT = `winget upgrade ${idQ} --exact --source winget --accept-source-agreements --disable-interactivity --silent --include-unknown --accept-package-agreements --force`;
       } else {
-        cmdT = `winget uninstall ${quoted} --source winget --silent --disable-interactivity`;
+        cmdT = `winget uninstall ${idQ} --exact --source winget --accept-source-agreements --disable-interactivity${verQ} --silent`;
       }
+      // cmd 保持纯净命令;PowerShell 追加退出码判断(PS 惯用写法,cmd 不支持该语法),
+      // 让 cmd / PowerShell 两个标签各有实际差异。
       cmd = cmdT;
-      ps = cmdT;
+      ps = cmdT + `
+if ($LASTEXITCODE -eq 0) { "${secLabelZh(key)}成功" } else { "${secLabelZh(key)}失败(退出码 $LASTEXITCODE)" }`;
     }
     out[key] = { cmd, powershell: ps };
   }
