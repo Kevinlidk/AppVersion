@@ -676,8 +676,13 @@
     background: var(--card); color: var(--text);
     width: min(420px, 92vw); padding: 20px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
-    /* 供移入弹窗内的 toast 做绝对定位 */
-    position: relative;
+    /* 固定定位居中于视口:页面滚动位置不受弹窗开/关影响
+       (relative 时浏览器会把页面滚回弹窗所在位置) */
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+    /* fixed 同样是定位上下文,供移入弹窗内的 toast 做绝对定位 */
   }
   dialog::backdrop { background: rgba(2, 6, 23, .55); }
   dialog h2 { font-size: 17px; margin: 0 0 4px; }
