@@ -845,6 +845,7 @@
     <button id="diagBtn" class="btn" data-i18n="diag_btn">🩺 配置检查</button>
     <button id="exportBtn" class="btn" data-i18n="export_btn">⬇ 导出配置</button>
     <button id="importBtn" class="btn" data-i18n="import_btn">⬆ 导入配置</button>
+    <button id="notifyAllBtn" class="btn"></button>
     <button id="hkToggleBtn" class="btn" aria-pressed="true">💬 一言气泡 · 开</button>
     <button id="editModeBtn" class="btn" data-i18n="edit_layout">✎ 编辑布局</button>
   </div>
@@ -1129,6 +1130,10 @@ const I18N = {
     link_name: "在首页把应用名显示为可点击链接(新标签页打开官网)",
     download_url: "最新版本下载地址",
     notify_label: "发现新版本时推送通知(渠道配置见 README);不勾选也会定时检查更新,仅不发消息",
+    notify_all_on: "🔔 推送通知 · 一键全开",
+    notify_all_off: "🔕 推送通知 · 一键全关",
+    notify_all_enabled: "已开启 {n} 个应用的推送通知",
+    notify_all_disabled: "已关闭 {n} 个应用的推送通知",
     cancel: "取消",
     save: "保存",
     create: "创建",
@@ -1374,6 +1379,10 @@ const I18N = {
     link_name: "Show the app name as a clickable link on the home page (opens the site in a new tab)",
     download_url: "Latest download URL",
     notify_label: "Push a notification when a new version is found (channels in README); scheduled checks still run without it — only the push is skipped",
+    notify_all_on: "🔔 Notify · enable all",
+    notify_all_off: "🔕 Notify · disable all",
+    notify_all_enabled: "Notifications enabled for {n} apps",
+    notify_all_disabled: "Notifications disabled for {n} apps",
     cancel: "Cancel",
     save: "Save",
     create: "Create",
@@ -2522,6 +2531,8 @@ function render() {
   $("#emptyState").classList.toggle("hidden", apps.length > 0);
   // 有数据但被筛选条件过滤空了,给出提示(否则页面看起来像没有应用)
   $("#noMatchHint").classList.toggle("hidden", !(apps.length > 0 && shown.length === 0));
+  // 一键推送按钮跟随应用数据同步(全部已开 → 显示「一键全关」,否则「一键全开」)
+  syncNotifyAllBtn();
 }
 
 async function load() {
@@ -4085,6 +4096,27 @@ $("#hkToggleBtn").addEventListener("click", async () => {
     } else {
       hkStop();
     }
+  } catch (e) {
+    toast(e.message, "error");
+  }
+});
+
+/** 一键推送开关按钮文案同步:全部应用都已开启推送时显示「一键全关」,否则「一键全开」 */
+function syncNotifyAllBtn() {
+  const btn = $("#notifyAllBtn");
+  if (!btn) return;
+  const allOn = apps.length > 0 && apps.every((a) => a.notify === true);
+  btn.textContent = allOn ? t("notify_all_off") : t("notify_all_on");
+  btn.disabled = apps.length === 0;
+}
+
+$("#notifyAllBtn").addEventListener("click", async () => {
+  // 以当前数据实时判断目标状态,避免与轮询刷新竞态
+  const enable = !apps.every((a) => a.notify === true);
+  try {
+    const out = await api("/api/apps/notify-all", { method: "POST", body: { enabled: enable } });
+    toast(t(enable ? "notify_all_enabled" : "notify_all_disabled", { n: out.changed ?? 0 }));
+    await load();
   } catch (e) {
     toast(e.message, "error");
   }

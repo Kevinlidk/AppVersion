@@ -2414,6 +2414,24 @@ async function handleApi(request, env, pathname) {
     return json(out);
   }
 
+  // 一键开启/关闭全部应用的「发现新版本时推送通知」(管理员,便于统一维护)
+  if (pathname === "/api/apps/notify-all" && method === "POST") {
+    await requireAdmin(env, request);
+    const body = await readJson(request);
+    if (typeof body.enabled !== "boolean") {
+      throw new ApiError("缺少 enabled 布尔参数:true 一键全开,false 一键全关");
+    }
+    const list = await readApps(env);
+    let changed = 0;
+    for (const app of list) {
+      if (Boolean(app.notify) !== body.enabled) changed++;
+      app.notify = body.enabled;
+    }
+    await writeApps(env, list);
+    console.log(`[admin] 批量${body.enabled ? "开启" : "关闭"}推送通知:共 ${list.length} 个,变更 ${changed} 个`);
+    return json({ ok: true, enabled: body.enabled, total: list.length, changed });
+  }
+
   if (pathname === "/api/apps/export" && method === "GET") {
     await requireAdmin(env, request);
     const list = await readApps(env);

@@ -36,7 +36,7 @@
 > `community.chocolatey.org` 本身托管在 **Cloudflare** 上(解析到 104.18.x.x)。Cloudflare Workers 的出口 IP 访问它时,容易被其 WAF 判定为异常并返回 **403** —— 这是**同网络内互相识别**导致,Worker 无法绕过(更换域名、换端点、改 UA 都无效)。
 > 已在代码层做到:按「302 重定向 → OData → FindPackagesById」三个端点依次降级尝试(某些环境能命中其一);若全部失败,会在错误提示与诊断面板中明确指出,并建议改用 winget 渠道。
 > **推荐做法**:新应用优先用 winget 渠道(数据源同为官方清单,且走 GitHub API,不受此限制);已有的 Chocolatey 应用可用「⇄ 转 winget」一键迁移。
-- ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 企业微信群机器人 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
+- ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 企业微信群机器人 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,管理员可在管理行**一键全开/全关全部应用的推送**,支持去重防骚扰
 - ✅ **更新提醒** —— 最新版本号以绿色显示;与当前版本不一致时卡片高亮「有新版本」,支持一键「已更新」标记
 - 🗂 **分组与自由排列** —— 参考 Uptime Kuma 的编辑逻辑(点「✎ 编辑布局」进入编辑模式):
   - **可新建 / 重命名 / 删除分组**(新建与重命名使用站内样式化弹窗);删除分组时组内应用自动移到「未分组」,不会丢失
@@ -228,7 +228,7 @@ curl -X POST https://appversion.kevinlidk.cn/api/check -H "Authorization: Bearer
 
 ## 通知推送配置
 
-检查发现新版本后,把所有更新**聚合为一条消息**发送到已配置的渠道;每个应用可在编辑弹窗中单独关闭「推送通知」。
+检查发现新版本后,把所有更新**聚合为一条消息**发送到已配置的渠道;每个应用可在编辑弹窗中单独关闭「推送通知」,管理员也可在管理行使用「🔔 推送通知 · 一键全开 / 🔕 一键全关」按钮统一维护全部应用(`POST /api/apps/notify-all`,返回 `changed` 实际变更数)。
 
 通过 Secret 或 Dashboard「设置 → 变量和机密」按需配置(可叠加多个渠道):
 
@@ -331,7 +331,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,88 项)
+npm test         # API + 定时推送冒烟测试(离线,90 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:

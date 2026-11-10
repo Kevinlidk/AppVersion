@@ -1813,6 +1813,51 @@ await test("diagnostics:WECOM_WEBHOOK_KEY 格式非法时给出告警", async ()
   }
 });
 
+await test("notify-all:未登录返回 401", async () => {
+  const res = await worker.fetch(new Request("http://localhost/api/apps/notify-all", post({ enabled: true })), env, ctx);
+  assertEq(res.status, 401, "状态码");
+});
+
+await test("notify-all:一键全开/全关,仅统计差异,其他字段保留", async () => {
+  const envN = { APP_KV: makeKV(), ADMIN_PASSWORD: "pn" };
+  const { cookie: ckn } = await loginAs(envN, "pn");
+  const callN = (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}) };
+    headers.cookie = "av_session=" + ckn;
+    return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), envN, ctx);
+  };
+  const a = await bodyOf(await callN("/api/apps", post({ name: "推送甲", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true })));
+  const b = await bodyOf(await callN("/api/apps", post({ name: "推送乙", channel: "winget", packageId: "Foo.Bar", version: "1.0.0", notify: false })));
+
+  // 缺 enabled 布尔参数 → 400
+  const bad = await callN("/api/apps/notify-all", post({}));
+  assertEq(bad.status, 400, "非法参数状态码");
+
+  // 一键全关:甲原本就是开,只有乙发生变化 → changed=1
+  const off = await bodyOf(await callN("/api/apps/notify-all", post({ enabled: false })));
+  assertEq(off.ok, true, "全关 ok");
+  assertEq(off.total, 2, "全关 total");
+  assertEq(off.changed, 1, "全关仅统计差异");
+  let list = await bodyOf(await callN("/api/apps"));
+  assertEq(list.every((x) => x.notify === false), true, "全部已关");
+  const aOff = list.find((x) => x.id === a.id);
+  assertEq(aOff.name, "推送甲", "名称保留");
+  assertEq(aOff.repo, "foo/bar", "repo 保留");
+  assertEq(aOff.version, "v1.0.0", "版本保留");
+
+  // 一键全开:两个都发生变化 → changed=2
+  const on = await bodyOf(await callN("/api/apps/notify-all", post({ enabled: true })));
+  assertEq(on.changed, 2, "全开统计");
+  list = await bodyOf(await callN("/api/apps"));
+  assertEq(list.every((x) => x.notify === true), true, "全部已开");
+
+  // 清空后空列表也安全
+  await callN("/api/apps/" + a.id, { method: "DELETE" });
+  await callN("/api/apps/" + b.id, { method: "DELETE" });
+  const empty = await bodyOf(await callN("/api/apps/notify-all", post({ enabled: true })));
+  assertEq(empty.total, 0, "空列表 total=0");
+});
+
 async function runScheduled(envX) {
   const waiters = [];
   const schedCtx = { waitUntil: (f) => waiters.push(f), passThroughOnException() {} };
