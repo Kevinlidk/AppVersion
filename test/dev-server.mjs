@@ -34,6 +34,7 @@ const env = {
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
   BARK_URL: process.env.BARK_URL,
   SERVERCHAN_SENDKEY: process.env.SERVERCHAN_SENDKEY,
+  WECOM_WEBHOOK_KEY: process.env.WECOM_WEBHOOK_KEY,
   APP_KV: {
     async get(k) { return kvStore.has(k) ? kvStore.get(k) : null; },
     async put(k, v) { kvStore.set(k, String(v)); },

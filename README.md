@@ -36,7 +36,7 @@
 > `community.chocolatey.org` 本身托管在 **Cloudflare** 上(解析到 104.18.x.x)。Cloudflare Workers 的出口 IP 访问它时,容易被其 WAF 判定为异常并返回 **403** —— 这是**同网络内互相识别**导致,Worker 无法绕过(更换域名、换端点、改 UA 都无效)。
 > 已在代码层做到:按「302 重定向 → OData → FindPackagesById」三个端点依次降级尝试(某些环境能命中其一);若全部失败,会在错误提示与诊断面板中明确指出,并建议改用 winget 渠道。
 > **推荐做法**:新应用优先用 winget 渠道(数据源同为官方清单,且走 GitHub API,不受此限制);已有的 Chocolatey 应用可用「⇄ 转 winget」一键迁移。
-- ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
+- ✅ **更新推送通知** —— GitHub Actions 定时触发检查(不占用 Cloudflare Cron 名额),发现新版本时聚合一条消息推送(支持飞书 / Telegram / Bark / Server酱 / 企业微信群机器人 / 通用 webhook,可同时配置多个);**推送需在应用表单中主动勾选(默认关闭)**,支持去重防骚扰
 - ✅ **更新提醒** —— 最新版本号以绿色显示;与当前版本不一致时卡片高亮「有新版本」,支持一键「已更新」标记
 - 🗂 **分组与自由排列** —— 参考 Uptime Kuma 的编辑逻辑(点「✎ 编辑布局」进入编辑模式):
   - **可新建 / 重命名 / 删除分组**(新建与重命名使用站内样式化弹窗);删除分组时组内应用自动移到「未分组」,不会丢失
@@ -242,6 +242,7 @@ curl -X POST https://appversion.kevinlidk.cn/api/check -H "Authorization: Bearer
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | 可选 | Telegram Bot 发消息 |
 | `BARK_URL` | 可选 | Bark(iOS)设备推送地址,如 `https://api.day.app/yourkey` |
 | `SERVERCHAN_SENDKEY` | 可选 | Server酱 SendKey,微信端接收 |
+| `WECOM_WEBHOOK_KEY` | 可选 | 企业微信群机器人 Key(见下文),text 纯文本推送,企业微信与微信端均完整显示 |
 | `NOTIFY_WEBHOOK_URL` | 可选 | 通用 webhook,POST `{title, text, apps[]}` JSON |
 
 ```bash
@@ -250,6 +251,14 @@ npx wrangler secret put GITHUB_TOKEN   # 同时强烈建议配置,见下
 ```
 
 > ⚠️ **必须配置 `GITHUB_TOKEN`**:GitHub 渠道与 winget 渠道都调用 GitHub API,未认证限额仅 60 次/小时/IP——Cloudflare Workers 出口 IP 为多租户共享,实测会被其他租户直接耗尽(额度 0/60),表现为"GitHub API 速率受限"。配置后提升到 5000 次/小时。
+
+### 如何创建 `WECOM_WEBHOOK_KEY`(企业微信群机器人)
+
+1. 在企业微信中打开目标群聊 → 右上角 **…** → **群机器人** → **添加机器人**;
+2. 创建后复制 webhook 地址,形如 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`;
+3. 把地址中的 **`key` 参数值**(UUID 形态)配置为 `WECOM_WEBHOOK_KEY`——也支持直接粘贴完整 webhook 地址,会自动提取 key;
+4. 之后每次发现新版本,会以 **`text` 纯文本类型**推送到该群(text 类型在企业微信客户端和绑定的微信里都能完整显示,不像 markdown 类型只在企业微信侧可见);
+5. 单条 content 上限 2048 字节,更新应用较多时会自动按行**拆分为多条消息**,保证内容完整不截断。
 
 ### 如何创建 `GITHUB_TOKEN`(含所需权限)
 
@@ -322,12 +331,12 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,83 项)
+npm test         # API + 定时推送冒烟测试(离线,88 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:
 > `GITHUB_TOKEN=xxx FEISHU_WEBHOOK_URL=https://… npm run serve`
-> (支持 `GITHUB_TOKEN` / `FEISHU_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_URL` / `SERVERCHAN_SENDKEY`)
+> (支持 `GITHUB_TOKEN` / `FEISHU_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_URL` / `SERVERCHAN_SENDKEY` / `WECOM_WEBHOOK_KEY`)
 
 ## 桌面版(GitHub Actions 在线构建)
 

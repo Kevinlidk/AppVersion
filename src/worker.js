@@ -1662,6 +1662,70 @@ async function postJson(url, data) {
   });
 }
 
+/* 企业微信群机器人:使用 text 纯文本类型,企业微信与绑定的微信里都能完整显示;
+   content 上限 2048 字节(UTF-8),超长自动按行分段成多条消息保证内容完整 */
+const WECOM_WEBHOOK_BASE = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send";
+const WECOM_CONTENT_MAX_BYTES = 1800; // 2048 上限留安全余量
+
+/** 从环境变量提取群机器人 Key:接受裸 UUID 形态的 Key,或完整 webhook 地址(自动截取 key 参数) */
+function normalizeWecomKey(v) {
+  const s = String(v ?? "").trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return s;
+  const m = s.match(/[?&]key=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return m ? m[1] : "";
+}
+
+/** UTF-8 字节长度 */
+function utf8ByteLen(s) {
+  return new TextEncoder().encode(s).length;
+}
+
+/** 把文本切成每段不超过 maxBytes(UTF-8) 的多段:优先按整行切,单行超长再按字符切,不切断多字节字符 */
+function utf8Chunks(text, maxBytes) {
+  if (utf8ByteLen(text) <= maxBytes) return [text];
+  const chunks = [];
+  let cur = "";
+  for (const line of String(text).split("\n")) {
+    const candidate = cur ? `${cur}\n${line}` : line;
+    if (utf8ByteLen(candidate) <= maxBytes) {
+      cur = candidate;
+      continue;
+    }
+    if (cur) {
+      chunks.push(cur);
+      cur = "";
+    }
+    if (utf8ByteLen(line) > maxBytes) {
+      for (const ch of line) {
+        if (cur && utf8ByteLen(cur + ch) > maxBytes) {
+          chunks.push(cur);
+          cur = "";
+        }
+        cur += ch;
+      }
+    } else {
+      cur = line;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+/** 推送企业微信群机器人 text 消息;errcode 非 0 视为发送失败。返回发送条数 */
+async function wecomSendTexts(key, text) {
+  const url = `${WECOM_WEBHOOK_BASE}?key=${encodeURIComponent(key)}`;
+  const contents = utf8Chunks(text, WECOM_CONTENT_MAX_BYTES);
+  for (const content of contents) {
+    const res = await postJson(url, { msgtype: "text", text: { content } });
+    let body = null;
+    try { body = await res.json(); } catch { /* 非 JSON 响应按失败处理 */ }
+    if (!body || body.errcode !== 0) {
+      throw new Error(`企业微信返回错误 errcode=${(body && body.errcode) ?? "?"} ${(body && body.errmsg) || ""}`.trim());
+    }
+  }
+  return contents.length;
+}
+
 /**
  * 把更新列表推送到所有已配置的渠道。
  * 返回 true 表示“无需发送(未配置渠道)”或“至少一个渠道发送成功”。
@@ -1694,6 +1758,14 @@ async function sendNotifications(env, found) {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ title, desp: lines.join("\n\n") }).toString(),
     }));
+  }
+  if (env.WECOM_WEBHOOK_KEY) {
+    const wecomKey = normalizeWecomKey(env.WECOM_WEBHOOK_KEY);
+    if (wecomKey) {
+      jobs.push(wecomSendTexts(wecomKey, text));
+    } else {
+      console.log("[notify] WECOM_WEBHOOK_KEY 格式不正确(应为群机器人 Key 或完整 webhook 地址),已跳过企业微信推送");
+    }
   }
   if (env.NOTIFY_WEBHOOK_URL) {
     jobs.push(postJson(env.NOTIFY_WEBHOOK_URL, {
@@ -1861,7 +1933,7 @@ async function runUpdateCheck(env, run = null) {
 }
 
 /** 根据配置与额度生成可读的诊断建议 */
-function buildDiagHints(config, github, choco) {
+function buildDiagHints(config, github, choco, env) {
   const hints = [];
   if (!config.kv) hints.push({ level: "error", text: "APP_KV 未绑定,应用数据无法保存" });
   if (!config.adminPassword) hints.push({ level: "error", text: "ADMIN_PASSWORD 未配置,编辑接口会全部拒绝" });
@@ -1890,6 +1962,12 @@ function buildDiagHints(config, github, choco) {
   }
   const notifyCount = Object.values(config.notify).filter(Boolean).length;
   if (!notifyCount) hints.push({ level: "info", text: "未配置任何通知渠道,发现新版本时只在页面展示,不会推送" });
+  if (config.notify.wecom && env && env.WECOM_WEBHOOK_KEY && !normalizeWecomKey(env.WECOM_WEBHOOK_KEY)) {
+    hints.push({
+      level: "warn",
+      text: "WECOM_WEBHOOK_KEY 已设置但无法识别出群机器人 Key:应填 UUID 形态的 Key,或完整 webhook 地址(qyapi.weixin.qq.com 结尾 ?key=…),请检查是否含多余字符",
+    });
+  }
 
   // Chocolatey 连通性
   if (choco) {
@@ -2192,6 +2270,7 @@ async function handleApi(request, env, pathname) {
         telegram: Boolean(env && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
         bark: Boolean(env && env.BARK_URL),
         serverchan: Boolean(env && env.SERVERCHAN_SENDKEY),
+        wecom: Boolean(env && env.WECOM_WEBHOOK_KEY),
         webhook: Boolean(env && env.NOTIFY_WEBHOOK_URL),
       },
     };
@@ -2247,7 +2326,7 @@ async function handleApi(request, env, pathname) {
       github,
       choco,
       data: { apps: list.length, groups: groups.length },
-      hints: buildDiagHints(config, github, choco),
+      hints: buildDiagHints(config, github, choco, env),
     });
   }
 

@@ -13,6 +13,8 @@ let chocoMode = "ok"; // ok | notfound | blocked | odataonly
 let ciscoMode = "ok"; // ok | blocked | garbage
 let wingetMode = "ok"; // ok | notfound
 const hookCalls = [];
+let wecomMode = "ok"; // ok | bizerror(HTTP 200 但业务 errcode 非 0)
+const wecomCalls = [];
 
 const ghBody = {
   tag_name: "v2.0.0",
@@ -226,6 +228,17 @@ globalThis.fetch = async (input, init) => {
   if (u === "https://notify.example/hook") {
     hookCalls.push({ url: u, body: init && init.body });
     return new Response("{}", { status: 200 });
+  }
+  // 企业微信群机器人 webhook:记录 payload,可模拟业务错误(HTTP 200 但 errcode 非 0)
+  if (u.startsWith("https://qyapi.weixin.qq.com/cgi-bin/webhook/send")) {
+    const body = JSON.parse((init && init.body) || "{}");
+    wecomCalls.push({ url: u, body });
+    if (wecomMode === "bizerror") {
+      return new Response(JSON.stringify({ errcode: 93000, errmsg: "invalid webhook key" }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ errcode: 0, errmsg: "ok" }),
+      { status: 200, headers: { "content-type": "application/json" } });
   }
   // 官方自查渠道的模拟响应
   if (u.startsWith("https://official.example/")) {
@@ -1706,6 +1719,97 @@ await test("scheduled:全部渠道发送失败时回滚标记,下次重试", asy
     assertEq(list2[0].notifiedVersion, "2.0.0", "重试成功记录 notifiedVersion");
   } finally {
     globalThis.fetch = realMock;
+  }
+});
+
+await test("scheduled:企业微信群机器人 text 推送,支持完整 webhook 地址自动提取 Key", async () => {
+  const envW = { APP_KV: makeKV(), CHECK_GAP_MS: "1",
+                 WECOM_WEBHOOK_KEY: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=5dcf1d05-0488-4086-9e1f-e0777b10e0fd",
+                 ADMIN_PASSWORD: "pw" };
+  wecomCalls.length = 0;
+  wecomMode = "ok";
+  const { cookie: ckw } = await loginAs(envW, "pw");
+  const callW = (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}) };
+    headers.cookie = "av_session=" + ckw;
+    return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), envW, ctx);
+  };
+  await callW("/api/apps", post({ name: "企业微信应用", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true }));
+  await runScheduled(envW);
+  assertEq(wecomCalls.length, 1, "企业微信推送次数");
+  const sent = wecomCalls[0];
+  assertEq(sent.body.msgtype, "text", "必须为 text 纯文本类型(企业微信与微信端均显示)");
+  assertEq(sent.body.text && sent.body.text.content.includes("企业微信应用"), true, "content 含应用名");
+  assertEq(sent.body.text && sent.body.text.content.includes("1.0.0 → 2.0.0"), true, "content 含版本变化");
+  assertEq(new URL(sent.url).searchParams.get("key"), "5dcf1d05-0488-4086-9e1f-e0777b10e0fd", "完整 webhook 地址中的 key 已提取");
+  const list = await bodyOf(await callW("/api/apps"));
+  assertEq(list[0].notifiedVersion, "2.0.0", "成功后记录 notifiedVersion");
+});
+
+await test("scheduled:企业微信 errcode 非 0 视为发送失败,不记录 notifiedVersion", async () => {
+  const envBad = { APP_KV: makeKV(), CHECK_GAP_MS: "1", WECOM_WEBHOOK_KEY: "11111111-2222-3333-4444-555555555555", ADMIN_PASSWORD: "pw2" };
+  wecomCalls.length = 0;
+  wecomMode = "bizerror";
+  try {
+    const { cookie: ckb } = await loginAs(envBad, "pw2");
+    const callB = (path, opts = {}) => {
+      const headers = { ...(opts.headers || {}) };
+      headers.cookie = "av_session=" + ckb;
+      return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), envBad, ctx);
+    };
+    await callB("/api/apps", post({ name: "失败应用", channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true }));
+    await runScheduled(envBad);
+    assertEq(wecomCalls.length, 1, "已尝试推送");
+    const list = await bodyOf(await callB("/api/apps"));
+    if (list[0].notifiedVersion !== undefined) throw new Error("errcode 非 0 不应记录 notifiedVersion");
+  } finally {
+    wecomMode = "ok";
+  }
+});
+
+await test("scheduled:企业微信 content 超长时自动分段发送且不超 2048 字节", async () => {
+  const envL = { APP_KV: makeKV(), CHECK_GAP_MS: "1", WECOM_WEBHOOK_KEY: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ADMIN_PASSWORD: "pw3" };
+  wecomCalls.length = 0;
+  wecomMode = "ok";
+  const { cookie: ckl } = await loginAs(envL, "pw3");
+  const callL = (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}) };
+    headers.cookie = "av_session=" + ckl;
+    return worker.fetch(new Request("http://localhost" + path, { ...opts, headers }), envL, ctx);
+  };
+  // 名称上限 100 字符:用长中文名放大每行体积,8 个应用总内容超过单条 2048 字节上限
+  const names = [];
+  for (let i = 0; i < 8; i++) {
+    const n = "分段超长应用" + i + "字".repeat(88);
+    names.push(n);
+    await callL("/api/apps", post({ name: n, channel: "github", repo: "foo/bar", version: "v1.0.0", notify: true }));
+  }
+  await runScheduled(envL);
+  const enc = new TextEncoder();
+  assertEq(wecomCalls.length, 2, "超长内容拆为两条消息");
+  const joined = wecomCalls.map((c) => c.body.text.content).join("\n---\n");
+  for (const n of names) {
+    assertEq(joined.includes(n), true, "分段后仍包含应用名 " + n.slice(0, 8));
+  }
+  for (const [i, c] of wecomCalls.entries()) {
+    assertEq(c.body.msgtype, "text", "每条均为 text 类型");
+    assertEq(enc.encode(c.body.text.content).length <= 2048, true, "第 " + (i + 1) + " 条不超 2048 字节");
+  }
+  const list = await bodyOf(await callL("/api/apps"));
+  assertEq(list.every((x) => x.notifiedVersion === "2.0.0"), true, "分段全部成功后记录 notifiedVersion");
+});
+
+await test("diagnostics:WECOM_WEBHOOK_KEY 格式非法时给出告警", async () => {
+  const envK = { APP_KV: makeKV(), ADMIN_PASSWORD: "pk", WECOM_WEBHOOK_KEY: "not-a-valid-key" };
+  const { cookie } = await loginAs(envK, "pk");
+  const res = await worker.fetch(
+    new Request("http://localhost/api/diagnostics", { headers: { cookie: "av_session=" + cookie } }),
+    envK, ctx
+  );
+  const d = await bodyOf(res);
+  assertEq(d.config.notify.wecom, true, "notify.wecom 已标记");
+  if (!d.hints.some((h) => h.level === "warn" && /WECOM_WEBHOOK_KEY/.test(h.text))) {
+    throw new Error("缺少 WECOM_WEBHOOK_KEY 格式告警");
   }
 });
 
