@@ -1858,6 +1858,65 @@ await test("notify-all:一键全开/全关,仅统计差异,其他字段保留", 
   assertEq(empty.total, 0, "空列表 total=0");
 });
 
+await test("notify/test:未登录 401,未配置渠道 400", async () => {
+  const anon = await worker.fetch(new Request("http://localhost/api/notify/test", { method: "POST" }), env, ctx);
+  assertEq(anon.status, 401, "匿名状态码");
+
+  const envNo = { APP_KV: makeKV(), ADMIN_PASSWORD: "pt" };
+  const { cookie } = await loginAs(envNo, "pt");
+  const res = await worker.fetch(
+    new Request("http://localhost/api/notify/test", { method: "POST", headers: { cookie: "av_session=" + cookie } }),
+    envNo, ctx
+  );
+  assertEq(res.status, 400, "无渠道状态码");
+  if (!/未配置任何通知渠道/.test((await bodyOf(res)).error)) throw new Error("提示文案不符");
+});
+
+await test("notify/test:企业微信 text 测试消息,逐渠道回显成功", async () => {
+  const envT = { APP_KV: makeKV(), ADMIN_PASSWORD: "pt2", WECOM_WEBHOOK_KEY: "12345678-1234-1234-1234-1234567890ab" };
+  wecomCalls.length = 0;
+  wecomMode = "ok";
+  const { cookie } = await loginAs(envT, "pt2");
+  const res = await worker.fetch(
+    new Request("http://localhost/api/notify/test", { method: "POST", headers: { cookie: "av_session=" + cookie } }),
+    envT, ctx
+  );
+  assertEq(res.status, 200, "状态码");
+  const r = await bodyOf(res);
+  assertEq(r.ok, true, "ok 标记");
+  assertEq(r.sent, 1, "成功渠道数");
+  assertEq(r.total, 1, "渠道总数");
+  assertEq(r.results[0].channel, "wecom", "渠道名");
+  assertEq(r.results[0].ok, true, "该渠道成功");
+  assertEq(r.results[0].error, null, "无错误");
+  assertEq(wecomCalls.length, 1, "实际调用一次");
+  assertEq(wecomCalls[0].body.msgtype, "text", "测试消息同样是 text 类型");
+  const content = wecomCalls[0].body.text.content;
+  if (!content.includes("测试通知")) throw new Error("测试消息应带测试标题:" + content);
+  if (!content.includes("1.0.0 → 1.0.1")) throw new Error("测试消息应包含示例版本变化:" + content);
+});
+
+await test("notify/test:企业微信 errcode 非 0 时逐渠道回显错误原因", async () => {
+  const envF = { APP_KV: makeKV(), ADMIN_PASSWORD: "pt3", WECOM_WEBHOOK_KEY: "abcdefab-1234-5678-9abc-defabcdefabc" };
+  wecomCalls.length = 0;
+  wecomMode = "bizerror";
+  try {
+    const { cookie } = await loginAs(envF, "pt3");
+    const res = await worker.fetch(
+      new Request("http://localhost/api/notify/test", { method: "POST", headers: { cookie: "av_session=" + cookie } }),
+      envF, ctx
+    );
+    assertEq(res.status, 200, "状态码");
+    const r = await bodyOf(res);
+    assertEq(r.ok, false, "全部失败时 ok=false");
+    assertEq(r.sent, 0, "成功数 0");
+    assertEq(r.results[0].ok, false, "该渠道失败");
+    if (!/errcode=93000/.test(r.results[0].error || "")) throw new Error("错误应含 errcode:" + r.results[0].error);
+  } finally {
+    wecomMode = "ok";
+  }
+});
+
 async function runScheduled(envX) {
   const waiters = [];
   const schedCtx = { waitUntil: (f) => waiters.push(f), passThroughOnException() {} };

@@ -338,6 +338,8 @@
   .diag-val { font-weight: 600; overflow-wrap: anywhere; }
   .diag-val.ok { color: var(--ok); }
   .diag-val.bad { color: var(--danger); }
+  .diag-actions { margin-top: 12px; display: flex; gap: 8px; }
+  .diag-actions .btn { min-height: 32px; padding: 0 12px; font-size: 13px; }
   .diag-hints { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
   .diag-hint {
     display: flex; gap: 8px; align-items: flex-start;
@@ -1285,6 +1287,11 @@ const I18N = {
     diag_title: "🩺 配置检查",
     diag_close_aria: "关闭配置检查",
     diag_close: "关闭",
+    notify_test_btn: "发送测试通知",
+    notify_test_running: "发送中…",
+    notify_test_done: "测试通知:成功 {ok}/{n} 个渠道",
+    notify_test_ok: "发送成功",
+    notify_test_fail: "发送失败",
     diag_running: "检查中…",
     diag_done_bad: "检查完成,发现 {n} 项问题",
     diag_done_ok: "检查完成,配置正常",
@@ -1534,6 +1541,11 @@ const I18N = {
     diag_title: "🩺 Diagnostics",
     diag_close_aria: "Close diagnostics",
     diag_close: "Close",
+    notify_test_btn: "Send test notification",
+    notify_test_running: "Sending…",
+    notify_test_done: "Test notification: {ok}/{n} channels succeeded",
+    notify_test_ok: "sent",
+    notify_test_fail: "failed",
     diag_running: "Checking…",
     diag_done_bad: "Done — {n} issue(s) found",
     diag_done_ok: "Done — config looks good",
@@ -3627,6 +3639,8 @@ function renderDiagnostics(d) {
     `<button type="button" class="diag-close" id="diagCloseBtn" aria-label="${esc(t("diag_close_aria"))}" title="${esc(t("diag_close"))}">✕</button>` +
     `</h3>` +
     `<div class="diag-grid">${rows.join("")}</div>` +
+    `<div class="diag-actions"><button type="button" id="notifyTestBtn" class="btn"${notifyNames.length ? "" : " disabled"}>` +
+    `🔔 ${esc(t("notify_test_btn"))}</button></div>` +
     (hints ? `<ul class="diag-hints">${hints}</ul>` : "");
   $("#diagPanel").classList.remove("hidden");
 }
@@ -3650,7 +3664,38 @@ $("#diagBtn").addEventListener("click", async () => {
 });
 
 // 关闭配置检查面板(事件委托:面板每次渲染都会重建)
-$("#diagPanel").addEventListener("click", (e) => {
+$("#diagPanel").addEventListener("click", async (e) => {
+  const testBtn = e.target.closest("#notifyTestBtn");
+  if (testBtn) {
+    if (testBtn.disabled) return;
+    testBtn.disabled = true;
+    const label = testBtn.textContent;
+    testBtn.textContent = t("notify_test_running");
+    try {
+      const r = await api("/api/notify/test", { method: "POST" });
+      const results = r.results || [];
+      // 明细逐渠道列出(成功的绿勾,失败的显示原始错误,例如企业微信的 errcode)
+      const items = results.map((x) =>
+        `<li class="diag-hint ${x.ok ? "ok" : "error"}"><span class="ico" aria-hidden="true">${x.ok ? "✓" : "✕"}</span>` +
+        `<span>${esc(x.channel)}:${esc(x.ok ? t("notify_test_ok") : (x.error || t("notify_test_fail")))}</span></li>`
+      ).join("");
+      let box = $("#notifyTestResult");
+      if (!box) {
+        box = document.createElement("ul");
+        box.id = "notifyTestResult";
+        box.className = "diag-hints";
+        $("#diagPanel").appendChild(box);
+      }
+      box.innerHTML = items;
+      toast(t("notify_test_done", { ok: r.sent, n: r.total }), r.ok ? undefined : "error");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      testBtn.textContent = label;
+      testBtn.disabled = false;
+    }
+    return;
+  }
   if (!e.target.closest("#diagCloseBtn")) return;
   $("#diagPanel").classList.add("hidden");
   $("#diagBtn").focus(); // 焦点回到触发按钮

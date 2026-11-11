@@ -230,6 +230,8 @@ curl -X POST https://appversion.kevinlidk.cn/api/check -H "Authorization: Bearer
 
 检查发现新版本后,把所有更新**聚合为一条消息**发送到已配置的渠道;每个应用可在编辑弹窗中单独关闭「推送通知」,管理员也可在管理行使用「🔔 推送通知 · 一键全开 / 🔕 一键全关」按钮统一维护全部应用(`POST /api/apps/notify-all`,返回 `changed` 实际变更数)。
 
+**配置完渠道后想确认能不能收到消息**:登录 → 「🩺 配置检查」→ 面板底部的「🔔 发送测试通知」按钮(`POST /api/notify/test`),会立即向所有已配置渠道发一条测试消息,并**逐渠道回显成败**;失败时直接显示原因(例如企业微信的 `errcode=93000 invalid webhook url`),不用等下一次定时检查。
+
 通过 Secret 或 Dashboard「设置 → 变量和机密」按需配置(可叠加多个渠道):
 
 | 环境变量 | 必配 | 说明 |
@@ -331,7 +333,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,90 项)
+npm test         # API + 定时推送冒烟测试(离线,93 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:

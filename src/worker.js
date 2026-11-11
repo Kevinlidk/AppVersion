@@ -1727,11 +1727,14 @@ async function wecomSendTexts(key, text) {
 }
 
 /**
- * 把更新列表推送到所有已配置的渠道。
- * 返回 true 表示“无需发送(未配置渠道)”或“至少一个渠道发送成功”。
+ * 构造各通知渠道的发送任务(正式推送与「发送测试通知」共用同一套逻辑)。
+ * @param {object} env
+ * @param {Array} found 更新条目 [{app, version}]
+ * @param {string} [titleOverride] 自定义标题(测试通知用)
+ * @returns {Array<{channel:string, run:Promise}>}
  */
-async function sendNotifications(env, found) {
-  const title = "📦 应用更新提醒";
+function buildNotifyJobs(env, found, titleOverride) {
+  const title = titleOverride || "📦 应用更新提醒";
   const lines = found.map((f) => {
     const a = f.app;
     return `• ${a.name}:${a.version || "—"} → ${f.version}` + (a.releaseUrl ? `\n　${a.releaseUrl}` : "");
@@ -1740,35 +1743,40 @@ async function sendNotifications(env, found) {
 
   const jobs = [];
   if (env.FEISHU_WEBHOOK_URL) {
-    jobs.push(postJson(env.FEISHU_WEBHOOK_URL, { msg_type: "text", content: { text } }));
+    jobs.push({ channel: "feishu", run: postJson(env.FEISHU_WEBHOOK_URL, { msg_type: "text", content: { text } }) });
   }
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-    jobs.push(postJson(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    jobs.push({ channel: "telegram", run: postJson(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: env.TELEGRAM_CHAT_ID,
       text,
-    }));
+    }) });
   }
   if (env.BARK_URL) {
     const base = env.BARK_URL.replace(/\/+$/, "");
-    jobs.push(requestOk(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(lines.join("\n"))}`));
+    jobs.push({ channel: "bark", run: requestOk(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(lines.join("\n"))}`) });
   }
   if (env.SERVERCHAN_SENDKEY) {
-    jobs.push(requestOk(`https://sctapi.ftqq.com/${env.SERVERCHAN_SENDKEY}.send`, {
+    jobs.push({ channel: "serverchan", run: requestOk(`https://sctapi.ftqq.com/${env.SERVERCHAN_SENDKEY}.send`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ title, desp: lines.join("\n\n") }).toString(),
-    }));
+    }) });
   }
   if (env.WECOM_WEBHOOK_KEY) {
     const wecomKey = normalizeWecomKey(env.WECOM_WEBHOOK_KEY);
     if (wecomKey) {
-      jobs.push(wecomSendTexts(wecomKey, text));
+      jobs.push({ channel: "wecom", run: wecomSendTexts(wecomKey, text) });
     } else {
-      console.log("[notify] WECOM_WEBHOOK_KEY 格式不正确(应为群机器人 Key 或完整 webhook 地址),已跳过企业微信推送");
+      // 配置了但格式不识别:作为失败任务暴露出来(测试通知能直接看到原因,正式推送也不静默伪装成功)
+      console.log("[notify] WECOM_WEBHOOK_KEY 格式不正确(应为群机器人 Key 或完整 webhook 地址),无法推送企业微信");
+      jobs.push({
+        channel: "wecom",
+        run: Promise.reject(new Error("WECOM_WEBHOOK_KEY 格式不正确:应为群机器人 Key 或完整 webhook 地址")),
+      });
     }
   }
   if (env.NOTIFY_WEBHOOK_URL) {
-    jobs.push(postJson(env.NOTIFY_WEBHOOK_URL, {
+    jobs.push({ channel: "webhook", run: postJson(env.NOTIFY_WEBHOOK_URL, {
       title,
       text,
       apps: found.map((f) => ({
@@ -1778,13 +1786,24 @@ async function sendNotifications(env, found) {
         latestVersion: f.version,
         releaseUrl: f.app.releaseUrl,
       })),
-    }));
+    }) });
   }
+  return jobs;
+}
 
+/**
+ * 把更新列表推送到所有已配置的渠道。
+ * 返回 true 表示“无需发送(未配置渠道)”或“至少一个渠道发送成功”。
+ */
+async function sendNotifications(env, found) {
+  const jobs = buildNotifyJobs(env, found);
   if (!jobs.length) return true;
-  const results = await Promise.allSettled(jobs);
-  for (const r of results) {
-    if (r.status === "rejected") console.log("[notify] 发送失败:", (r.reason && r.reason.message) || r.reason);
+  const results = await Promise.allSettled(jobs.map((j) => j.run));
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "rejected") {
+      console.log(`[notify] ${jobs[i].channel} 发送失败:`, (r.reason && r.reason.message) || r.reason);
+    }
   }
   return results.some((r) => r.status === "fulfilled");
 }
@@ -2412,6 +2431,28 @@ async function handleApi(request, env, pathname) {
     }
 
     return json(out);
+  }
+
+  // 发送测试通知:逐渠道回显成败与错误原因,便于确认新配置的渠道是否可用(管理员)
+  if (pathname === "/api/notify/test" && method === "POST") {
+    await requireAdmin(env, request);
+    const sample = [{
+      app: { id: "notify-test", name: "AppVersion 测试应用", version: "1.0.0", releaseUrl: "https://appversion.kevinlidk.cn" },
+      version: "1.0.1",
+    }];
+    const jobs = buildNotifyJobs(env, sample, "🔔 AppVersion 测试通知");
+    if (!jobs.length) {
+      throw new ApiError("未配置任何通知渠道:请先设置 WECOM_WEBHOOK_KEY 等环境变量", 400);
+    }
+    const settled = await Promise.allSettled(jobs.map((j) => j.run));
+    const results = settled.map((r, i) => ({
+      channel: jobs[i].channel,
+      ok: r.status === "fulfilled",
+      error: r.status === "rejected" ? ((r.reason && r.reason.message) || String(r.reason)) : null,
+    }));
+    const sent = results.filter((r) => r.ok).length;
+    console.log(`[notify] 测试推送:成功 ${sent}/${results.length}`);
+    return json({ ok: sent > 0, sent, total: results.length, results });
   }
 
   // 一键开启/关闭全部应用的「发现新版本时推送通知」(管理员,便于统一维护)
