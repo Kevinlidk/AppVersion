@@ -33,11 +33,20 @@
   // Build on top of the engine defaults so we remain compatible with engine
   // changes. interactive:false disables pointer/keydown listeners (patched in
   // the local renderer.js; default true preserves the original app behavior).
+  //
+  // 种子在挂载时生成一次,并被下方 settings 闭包整个会话引用:
+  // - 未指定 ?seed= 时取随机值,每次进入页面图案各不相同;
+  // - 同一次会话内 settings() 始终返回同一对象,风场由固定种子确定性推导,
+  //   因此不跳变、平滑流动(实测:多次采样 dataset.look 中种子一致,state=moving)。
+  var mountSeed = numParam('seed', (Math.random() * 0x100000000) >>> 0);
+
   var settings = Object.assign(GlyphWind.defaults(), {
-    seed: numParam('seed', 0x19a4c637),
+    seed: mountSeed,
     look: look,
     interactive: false
   });
+  // 图案参数同样只在挂载时推导一次(pattern 由种子确定性生成),后续每帧直接复用
+  settings.field = GlyphWind.pattern(mountSeed, look);
 
   var timing = function () { return { fadeIn: 3000, fadeOut: 500 }; };
 

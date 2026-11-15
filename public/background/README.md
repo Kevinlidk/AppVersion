@@ -80,7 +80,8 @@
 - `z-index` / `pointer-events:none`：保证在内容之下且永不拦截点击。
 
 ### `settings`（传给 `create`，默认来自 `GlyphWind.defaults()`）
-- `seed`（数字）：图案种子；缺省用引擎默认（每次一致）。
+- `seed`（数字）：图案种子；`loader.js` 缺省在**挂载时随机生成一次**并闭包引用（每次进入页面图案随机，会话内风场稳定平滑），`?seed=` 可固定复现。
+- `field`（可选）：预生成的图案参数（`GlyphWind.pattern(seed, look)`）。`loader.js` 已在挂载时推导一次预置传入，引擎每帧直接复用、不再重算。
 - `look`：`'mixed' | 'lettered' | 'figured'`，字符集。
 - `interactive`：`false` 装饰不可交互；`true` 启用鼠标尾迹 / 点击涟漪（监听绑在父元素，忽略 `a/button/input`）。
 - `strength`：整体亮度（默认约 0.78 不透明度）。
@@ -90,7 +91,7 @@
 - `{ fadeIn, fadeOut }`（毫秒）：窗口失焦淡出、获焦淡入。
 
 ### URL 参数（仅 `loader.js` 生效）
-- `?seed=<数字>&look=<mixed|lettered|figured>`。
+- `?seed=<数字>&look=<mixed|lettered|figured>`：固定种子可复现；不指定时每次进入随机。
 
 ---
 
