@@ -14,7 +14,7 @@
     - **正确区分分组目录与子包目录**:只把「版本形态」(如 `15.83.5`)的目录当版本——`Adobe/Acrobat/Pro/2020/…` 里的年份目录不会被当成版本号;`TeamViewer/TeamViewer/Host/` 这类**子包目录**(里面是另一个包 `TeamViewer.TeamViewer.Host` 的清单)也会被排除,避免误选后按本包 ID 找不到 `installer.yaml` 而使下载候选为空。若整包都按分组存放,才下钻一层兜底
     - **解析兜底**:选中的版本路径若取不到本包的 `installer.yaml`,自动回退到版本号次高的候选
     - **按 last commit date 判定最新**:版本号最高者胜;**单应用手动刷新**时会再取该版本目录的最后一次提交时间作为发布日期(清单仓库每次发版都会提交)。**定时批量检查默认跳过日期请求** —— Cloudflare 免费版限制单次调用最多 50 个子请求(含 KV 读写),日期仅在预算充裕或版本目录走了下钻兜底(命名不可信)时才发
-  - **检查自动分批,应用数量不再受单次调用限制** —— 应用多于批大小时,`/api/check` 每次只查一批(默认 10 个,可用环境变量 `CHECK_BATCH_SIZE` 调整),进度存 KV 并返回 `runId`/`nextBatch`,GitHub Actions 工作流循环调用直到 `done=true`;**所有更新仍在最后一批聚合并发送为一条通知**。批大小经子请求预算校验(KV 读写也计入),40 个应用也只需 4 批
+  - **检查自动分批,应用数量不再受单次调用限制** —— 应用多于批大小时,`/api/check` 每次只查一批(默认 10 个,可用环境变量 `CHECK_BATCH_SIZE` 调整),进度存 KV 并返回 `runId`/`nextBatch`,GitHub Actions 工作流循环调用直到 `done=true`;**所有更新仍在最后一批聚合并发送为一条通知**。批大小经子请求预算校验(KV 读写也计入),40 个应用也只需 4 批。**Docker 自托管没有平台限制**:`SUBREQUEST_LIMIT` + 大批大小一批查完全部应用,内置定时器默认每小时全量检查(见「Docker 自托管部署」)
   - **官方自查(自定义 API)**:填入厂商公开的版本 API 地址 + 版本字段路径,直接读取最新版本号。适用于 Chrome、.NET 这类提供结构化版本数据但没有标准 Release 接口的应用
   - **内置应用(官方自查预设)** —— 选中「官方自查(自定义 API)」后,面板顶部列出**内置应用**,点击即自动填好名称 / API 地址 / 字段路径(专用解析型还会锁定输入框),无需手查接口。当前内置:
     - **Google Chrome (win64 stable)** —— win64 stable 渠道的最新正式版
@@ -112,6 +112,11 @@
 
 ```
 ├── src/worker.js        # Worker:REST API、多渠道版本查询、检查与通知推送
+├── docker/
+│   ├── server.mjs       # 自托管入口:FileKV(磁盘持久化)+ 静态资源 + HTTP 桥 + 内置定时检查
+│   └── entrypoint.sh    # 容器启动:同步镜像内代码到数据卷(保留 data/ 数据)
+├── Dockerfile           # 自托管镜像(node:22-alpine,零运行时依赖)
+├── docker-compose.yml   # 一键部署模板(环境变量齐全)
 ├── scripts/
 │   ├── build-config.mjs # 部署前注入 KV_NAMESPACE_ID,生成 wrangler.generated.toml
 │   └── make-app-icon.py # 生成桌面版图标 desktop/app-icon.png(1024×1024)
@@ -122,10 +127,11 @@
 ├── public/favicon.svg   # 站点图标(另有 favicon.ico / apple-touch-icon.png / icon-192.png)
 ├── .github/workflows/   # check-updates.yml:定时触发 /api/check
 │                        # build-pake.yml:三平台构建桌面版并发布 Releases
+│                        # docker-publish.yml:构建发布 GHCR 官方镜像
 ├── wrangler.toml        # Cloudflare Workers 基础配置(assets / 说明)
 ├── package.json
 └── test/
-    ├── smoke.mjs        # API + 通知推送冒烟测试(离线)
+    ├── smoke.mjs        # API + 通知推送 + Docker 适配层冒烟测试(离线)
     └── dev-server.mjs   # 轻量本地预览服务器(可选,无 wrangler 也能跑)
 ```
 
@@ -172,6 +178,70 @@ npm run dev      # 本地开发(同样先注入)
 
 > 首次需要创建命名空间:`npx wrangler kv namespace create APP_KV`,命令会输出 ID。
 
+## Docker 自托管部署(ghcr.io 官方镜像)
+
+不想依赖 Cloudflare(或想部署在自己的服务器 / NAS)时,可直接使用官方镜像自托管:**单容器同时提供静态页面与 `/api`**,数据持久化在本地磁盘,没有 Cloudflare 免费版的子请求/调用额度限制。镜像由 GitHub Actions 在每次 push 到 `main` 时自动构建发布:`ghcr.io/kevinlidk/appversion:latest`。
+
+仓库根目录已提供 `docker-compose.yml`,**改好 `ADMIN_PASSWORD`(和可选的 `GITHUB_TOKEN`)即可直接部署**:
+
+```yaml
+services:
+  appversion:
+    container_name: appversion
+    image: ghcr.io/kevinlidk/appversion:latest
+    environment:
+      - ADMIN_PASSWORD=change-me-please      # ✅ 必改:管理员密码
+      - GITHUB_TOKEN=                        # 强烈建议:GitHub 只读令牌
+      - CHECK_INTERVAL_MS=3600000            # 检查周期:默认 1 小时全量检查
+      - CHECK_BATCH_SIZE=500                 # 自托管无平台限制,一批跑完全部应用
+      - SUBREQUEST_LIMIT=100000              # 放开 Cloudflare 免费版 50 子请求预算
+      # 通知渠道按需取消注释:WECOM_WEBHOOK_KEY / FEISHU_WEBHOOK_URL /
+      # TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID / BARK_URL / SERVERCHAN_SENDKEY / NOTIFY_WEBHOOK_URL
+    volumes:
+      - ./appversion/:/opt/appversion/
+    ports:
+      - "3103:80"
+    restart: unless-stopped
+    networks:
+      - appversion_network
+
+networks:
+  appversion_network:
+    driver: bridge
+```
+
+```bash
+docker compose up -d        # 访问 http://<服务器IP>:3103
+# 升级:docker compose pull && docker compose up -d(数据不丢)
+```
+
+### 自托管与 Cloudflare 部署的差异
+
+| | Cloudflare Workers | Docker 自托管 |
+| --- | --- | --- |
+| 存储 | 云端 KV(免费版有每日读写额度) | 本地磁盘 `./appversion/data/kv.json`,**无任何额度限制,实时同步** |
+| 检查触发 | GitHub Actions 定时(每 6 小时,可能被 GitHub 延迟/丢弃) | 容器内置定时器,**默认每小时全量检查**,稳定准时 |
+| 检查分批 | 受 50 子请求/调用限制,`CHECK_BATCH_SIZE` 分批续跑 | `SUBREQUEST_LIMIT` + 大 `CHECK_BATCH_SIZE`,**一批检查全部应用** |
+| 手动全量刷新 | 「全部刷新」同样分批 | 一批跑完,无等待 |
+
+> 唯一剩余的上游约束是 **GitHub API 速率**(与部署平台无关):匿名 60 次/小时/IP,配置 `GITHUB_TOKEN` 后 5000 次/小时——足够数百个应用每小时一轮检查。Cloudflare 部署则自动保持省额度节奏,两种方式同一套代码,行为差异只来自环境变量。
+
+### 自托管环境变量
+
+| 环境变量 | 必配 | 说明 |
+| --- | --- | --- |
+| `ADMIN_PASSWORD` | ✅ | 管理员密码,编辑类接口的登录凭据 |
+| `GITHUB_TOKEN` | 强烈建议 | GitHub 只读令牌(匿名额度极易被共享出口 IP 耗尽) |
+| `CHECK_INTERVAL_MS` | 可选 | 内置定时检查周期,默认 `3600000`(1 小时) |
+| `CHECK_BATCH_SIZE` | 可选 | 单批应用数,自托管默认建议 ≥ 应用总数(模板为 500) |
+| `SUBREQUEST_LIMIT` | 可选 | 子请求预算,自托管模板放开为 100000(Cloudflare 默认 42) |
+| `CRON_SECRET` | 可选 | 外部 `curl` 触发 `/api/check` 的令牌(内置定时器不依赖它) |
+| `PORT` / `DATA_DIR` | 可选 | 监听端口(默认 80)/ 数据目录(默认 `<应用目录>/data`) |
+| 各通知渠道变量 | 可选 | 同「通知推送配置」章节,`WECOM_WEBHOOK_KEY` 等 |
+
+> 容器启动时会把镜像内代码同步到 `/opt/appversion/`(即挂载的 `./appversion/`),应用数据都在其中 `data/` 子目录——**升级镜像只更新代码,数据保留**;请勿在宿主目录修改除 `data/` 以外的文件。
+> 镜像构建:`.github/workflows/docker-publish.yml` 在 push 到 `main` 时自动发布 `latest` 与按 commit SHA 的标签;无需配置任何 Secret(GHCR 用内置 `GITHUB_TOKEN`)。
+
 ## 管理员与权限
 
 页面默认为**访客只读视图**:可以查看应用列表、版本与更新状态,不能做任何修改。
@@ -192,6 +262,8 @@ npx wrangler secret put ADMIN_PASSWORD
 ## 定时检查(由 GitHub Actions 驱动)
 
 定时检查由仓库内的 `.github/workflows/check-updates.yml` 驱动(**不使用 Cloudflare Cron Trigger**,以节省账号的 crons 名额)。workflow 配置了两条错峰 cron 线(UTC `30 */6` 与 `37 2,8,14,20`,合计每 ~3 小时一个触发时点)调用 Worker 的 `POST /api/check`,也支持在 Actions 页面手动运行。
+
+> **Docker 自托管不需要本章节**:容器内置定时器默认**每小时**全量检查一次(无 GitHub schedule 延迟/丢弃问题),`CHECK_INTERVAL_MS` 可调,见「Docker 自托管部署」。
 
 **应用多于批大小时检查自动分批**:`POST /api/check` 每次调用只查一批(默认 10 个,可用环境变量 `CHECK_BATCH_SIZE` 调整),进度存 KV 并返回 `runId` / `nextBatch` / `done:false`;工作流循环调用直到 `done=true`(最多 40 批,单 Worker 免费版 50 个子请求的上限不再限制应用总数)。所有更新仍在最后一批聚合并发送为一条通知。
 
@@ -333,7 +405,7 @@ npm install
 npm run dev      # 注入 KV 后启动 wrangler dev,地址 http://localhost:8787(需 .dev.vars 中有 KV_NAMESPACE_ID)
 npm run serve    # 或用轻量预览服务器(KV 内存模拟,GitHub/Chocolatey 返回示例数据;
                  #   curl -X POST http://127.0.0.1:8799/__run-check 可手动触发一次定时检查)
-npm test         # API + 定时推送冒烟测试(离线,93 项)
+npm test         # API + 定时推送冒烟测试(离线,97 项)
 ```
 
 > 本地预览也可传入真实环境变量以验证完整链路,例如:

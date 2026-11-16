@@ -1,0 +1,19 @@
+# 依赖与本地产物(镜像零运行时依赖,不需要 node_modules)
+node_modules
+wrangler.generated.toml
+
+# 版本控制与 CI(发布 workflow 在 Actions 里跑,不进镜像)
+.git
+.github
+
+# 本地数据与临时文件
+data
+*.log
+.DS_Store
+Thumbs.db
+
+# 工作区辅助目录(不入库不入镜像)
+plugins
+参考
+.cfk
+.zcode

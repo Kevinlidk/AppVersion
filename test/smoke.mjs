@@ -6,6 +6,19 @@
  * 对 Worker 的 API 逻辑、鉴权、定时检查与通知推送做验证。
  */
 import worker from "../src/worker.js";
+import { FileKV, createAssets, buildEnv, startServer } from "../docker/server.mjs";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import os from "node:os";
+
+/** 测试专用临时目录(每次进程唯一) */
+function tmpDir() {
+  const d = path.join(os.tmpdir(), "appversion-smoke-" + process.pid);
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /* ── mock 外部 API ── */
 let ghMode = "ok"; // ok | notfound | ratelimited
@@ -1915,6 +1928,99 @@ await test("notify/test:企业微信 errcode 非 0 时逐渠道回显错误原�
   } finally {
     wecomMode = "ok";
   }
+});
+
+/* ── Docker 自托管适配层(FileKV / 静态资源 / HTTP 桥)── */
+
+await test("docker FileKV:get/put/delete 与 expirationTtl 过期", async () => {
+  const file = path.join(tmpDir(), "kv-test-" + Date.now() + ".json");
+  const kvA = new FileKV(file);
+  await kvA.put("plain", "hello");
+  assertEq(await kvA.get("plain"), "hello", "普通读写");
+  await kvA.put("temp", "gone-soon", { expirationTtl: 1 }); // 1 秒
+  assertEq(await kvA.get("temp"), "gone-soon", "TTL 内可读");
+  await new Promise((r) => setTimeout(r, 1100));
+  assertEq(await kvA.get("temp"), null, "TTL 过后为 null");
+  await kvA.put("tmp2", "x");
+  await kvA.delete("tmp2");
+  assertEq(await kvA.get("tmp2"), null, "删除生效");
+  await kvA.close();
+  // 持久化:新实例从同一文件读回
+  const kvB = new FileKV(file);
+  assertEq(await kvB.get("plain"), "hello", "重启(新实例)后数据仍在");
+  await kvB.close();
+});
+
+await test("docker createAssets:静态页 200/防目录穿越/SPA 兜底", async () => {
+  const assets = createAssets(path.resolve(ROOT, "public"));
+  const ok = await assets.fetch(new Request("http://localhost/"));
+  assertEq(ok.status, 200, "首页状态码");
+  if (!(await ok.text()).includes("AppVersion")) throw new Error("首页内容不符");
+  const css = await assets.fetch(new Request("http://localhost/background/engine.css"));
+  assertEq(css.status, 200, "子路径资源");
+  if (!String(css.headers.get("content-type")).includes("text/css")) throw new Error("CSS MIME 不符");
+  // %2f 不会被 URL 规范化,解码后的点段由 normalize+startsWith 拦截
+  const escape = await assets.fetch(new Request("http://localhost/..%2f..%2fpackage.json"));
+  assertEq(escape.status, 404, "目录穿越被拒");
+  const spa = await assets.fetch(new Request("http://localhost/not-exist-path"));
+  assertEq(spa.status, 200, "SPA 兜底回 index.html");
+});
+
+await test("docker HTTP 桥:server 起服务,登录→加应用→列表→会话,CRON_SECRET 可触发检查", async () => {
+  const kvFile = path.join(tmpDir(), "kv-http-" + Date.now() + ".json");
+  process.env.ADMIN_PASSWORD = "docker-pass";
+  process.env.CRON_SECRET = "docker-cron";
+  const started = await startServer({ port: 0, kvFile }); // 随机端口;env 从 process.env 构造
+  const base = "http://127.0.0.1:" + started.server.address().port;
+  const html = await (await fetch(base + "/")).text();
+  if (!html.includes("AppVersion")) throw new Error("静态首页未由 server 返回");
+  const session = await (await fetch(base + "/api/session")).json();
+  assertEq(session.configured, true, "ADMIN_PASSWORD 已识别");
+  const login = await fetch(base + "/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "docker-pass" }) });
+  assertEq(login.status, 200, "登录状态码");
+  const cookie = (login.headers.get("set-cookie") || "").match(/av_session=([^;]+)/)[1];
+  const created = await (await fetch(base + "/api/apps", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "av_session=" + cookie },
+    body: JSON.stringify({ name: "docker 应用", channel: "github", repo: "foo/bar", version: "v1.0.0" }),
+  })).json();
+  if (!created.id) throw new Error("添加应用失败:" + JSON.stringify(created));
+  const list = await (await fetch(base + "/api/apps")).json();
+  if (!list.some((a) => a.id === created.id)) throw new Error("列表缺少新应用");
+  const checkRes = await fetch(base + "/api/check", { method: "POST", headers: { authorization: "Bearer docker-cron" } });
+  assertEq(checkRes.status, 200, "CRON_SECRET 触发检查");
+  const summary = await checkRes.json();
+  // 首次列表会注入 Google Chrome 示例(非 manual),与新应用一起被检查
+  assertEq(summary.checked >= 1, true, "自托管单批全量检查");
+  await started.stop();
+  // KV 落盘验证
+  const persisted = JSON.parse(await fs.promises.readFile(kvFile, "utf8"));
+  if (!JSON.stringify(persisted).includes("docker 应用")) throw new Error("应用数据未持久化到磁盘");
+});
+
+await test("docker:SUBREQUEST_LIMIT 放开子请求预算", async () => {
+  const kvFile = path.join(tmpDir(), "kv-limit-" + Date.now() + ".json");
+  const kv = new FileKV(kvFile);
+  const envL = buildEnv(kv, createAssets(path.resolve(ROOT, "public")));
+  envL.SUBREQUEST_LIMIT = "100000";
+  envL.ADMIN_PASSWORD = "pl";
+  envL.CHECK_BATCH_SIZE = "500"; // 自托管一批跑完全部应用,不触发多批协议
+  const { cookie } = await loginAs(envL, "pl");
+  const callL = (p, o = {}) => {
+    const h = { ...(o.headers || {}) };
+    h.cookie = "av_session=" + cookie;
+    return worker.fetch(new Request("http://localhost" + p, { ...o, headers: h }), envL, ctx);
+  };
+  // 12 个 GitHub 应用 > 默认批大小 10:SUBREQUEST_LIMIT 放开后 KV 预算不再是约束,
+  // 一批即可跑完全部应用(GitHub 渠道走 mock,不触网)
+  for (let i = 0; i < 12; i++) {
+    await callL("/api/apps", post({ name: "批量" + i, channel: "github", repo: "foo/bar", version: "v1.0.0", notify: false }));
+  }
+  const res = await callL("/api/check", { method: "POST" }); // 管理员会话触发
+  assertEq(res.status, 200, "管理员触发检查");
+  const summary = await bodyOf(res);
+  assertEq(summary.checked, 12, "SUBREQUEST_LIMIT+大批大小:单批全量检查");
+  await kv.close();
 });
 
 async function runScheduled(envX) {

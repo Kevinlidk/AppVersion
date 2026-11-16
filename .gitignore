@@ -10,7 +10,11 @@ Thumbs.db
 .mimosa/
 参考/
 
+# Docker 自托管数据目录(docker/server.mjs 的 FileKV 落盘位置,绝不入库)
+data/
+
 # 打包脚本的临时产物
 pake-result.json
 pake-log.txt
 run2.zip
+plugins/

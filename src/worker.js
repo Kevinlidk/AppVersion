@@ -915,14 +915,22 @@ async function fetchGitHubLatest(repo, env) {
    一次 /api/check 要查 20+ 个应用,必须省着用:核心请求(清单列表、
    installer.yaml)优先,可选增强(发布日期等)只在预算充裕时发出。
    计数器在每次检查/单应用刷新开始时清零。 */
-const SUBREQUEST_SOFT_LIMIT = 42;
+// Cloudflare 免费版单次调用约 50 个子请求,留余量取 42 作为软上限;
+// 自托管(Node/Docker)没有该平台限制,可用 SUBREQUEST_LIMIT 环境变量放开
+const SUBREQUEST_SOFT_LIMIT_DEFAULT = 42;
+let subrequestSoftLimit = SUBREQUEST_SOFT_LIMIT_DEFAULT;
 let subrequestsUsed = 0;
+/** 按部署环境调整子请求预算:Cloudflare 默认 42;Docker 等自托管可设大值(如 100000) */
+function applySubrequestLimit(env) {
+  const n = Number(env && env.SUBREQUEST_LIMIT);
+  subrequestSoftLimit = Number.isFinite(n) && n > 0 ? n : SUBREQUEST_SOFT_LIMIT_DEFAULT;
+}
 function subrequestTick() {
   subrequestsUsed += 1;
   return subrequestsUsed;
 }
 function subrequestBudgetOk(need = 1) {
-  return subrequestsUsed + need <= SUBREQUEST_SOFT_LIMIT;
+  return subrequestsUsed + need <= subrequestSoftLimit;
 }
 
 async function fetchWithRetry(url, opts, attempts = 3) {
@@ -1815,6 +1823,7 @@ async function sendNotifications(env, found) {
  * @returns {{checked:number,updated:number,notified:boolean,updates:object[],errors:object[]}}
  */
 async function runUpdateCheck(env, run = null) {
+  applySubrequestLimit(env); // 同上:自托管可经 SUBREQUEST_LIMIT 放开预算
   // 批量检查从零计子请求预算(KV 与 fetch 都计数)
   subrequestsUsed = 0;
   const list = await readApps(env);
@@ -2038,6 +2047,7 @@ export default {
 
 async function handleApi(request, env, pathname) {
   const method = request.method;
+  applySubrequestLimit(env); // Cloudflare 默认 42;自托管经 SUBREQUEST_LIMIT 放开
 
   /* ── 鉴权(公开接口)── */
 

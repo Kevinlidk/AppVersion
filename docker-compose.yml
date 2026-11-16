@@ -1,0 +1,48 @@
+# AppVersion 自托管部署(与 Cloudflare 部署二选一,也可并存)
+#
+# 使用:
+#   1. 修改下方 ADMIN_PASSWORD(必改)
+#   2. 按需填 GITHUB_TOKEN 与通知渠道环境变量
+#   3. docker compose up -d
+#   4. 访问 http://<服务器IP>:3103
+#
+# 数据持久化在宿主 ./appversion/ 目录(应用列表/分组/会话都在其中 data/ 子目录),
+# 升级镜像只需 docker compose pull && docker compose up -d,数据不丢。
+#
+# 检查频率:默认每小时自动全量检查一次(自托管没有 Cloudflare 免费版的
+# 50 子请求/调用限制,SUBREQUEST_LIMIT + CHECK_BATCH_SIZE 已放开,
+# 全部应用一批查完;唯一剩余约束是 GitHub API 上游额度:
+# 匿名 60 次/小时/IP,配置 GITHUB_TOKEN 后 5000 次/小时)。
+
+services:
+  appversion:
+    container_name: appversion
+    image: ghcr.io/kevinlidk/appversion:latest
+    environment:
+      # ── 基础配置 ──
+      - ADMIN_PASSWORD=change-me-please      # ✅ 必改:管理员密码,登录后可编辑监控应用
+      - GITHUB_TOKEN=                        # 强烈建议:GitHub 只读令牌(public_repo / Contents:Read)
+      - CRON_SECRET=                         # 可选:外部 curl 触发 /api/check 的令牌(内置定时器不依赖它)
+      # ── 检查节奏(自托管默认值,一般无需调整)──
+      - CHECK_INTERVAL_MS=3600000            # 定时检查周期:默认 1 小时全量检查
+      - CHECK_BATCH_SIZE=500                 # 单批应用数:自托管无平台限制,一批跑完全部
+      - SUBREQUEST_LIMIT=100000              # 放开 Cloudflare 免费版 50 子请求预算(自托管不适用)
+      # ── 通知渠道(可选,按需取消注释)──
+      # - WECOM_WEBHOOK_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   # 企业微信群机器人 Key(或完整 webhook 地址)
+      # - FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+      # - TELEGRAM_BOT_TOKEN=
+      # - TELEGRAM_CHAT_ID=
+      # - BARK_URL=https://api.day.app/yourkey
+      # - SERVERCHAN_SENDKEY=
+      # - NOTIFY_WEBHOOK_URL=
+    volumes:
+      - ./appversion/:/opt/appversion/
+    ports:
+      - "3103:80"
+    restart: unless-stopped
+    networks:
+      - appversion_network
+
+networks:
+  appversion_network:
+    driver: bridge
