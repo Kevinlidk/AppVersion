@@ -27,8 +27,8 @@ services:
       - CHECK_INTERVAL_MS=3600000            # 定时检查周期:默认 1 小时全量检查
       - CHECK_BATCH_SIZE=500                 # 单批应用数:自托管无平台限制,一批跑完全部
       - SUBREQUEST_LIMIT=100000              # 放开 Cloudflare 免费版 50 子请求预算(自托管不适用)
-      # ── 通知渠道(可选,按需取消注释)──
-      # - WECOM_WEBHOOK_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   # 企业微信群机器人 Key(或完整 webhook 地址)
+      # ── 通知渠道(可选;WECOM 默认启用,填 Key 后即推送,其余按需取消注释)──
+      - WECOM_WEBHOOK_KEY=                    # 企业微信群机器人 Key(UUID 或完整 webhook 地址);留空则不推送企业微信
       # - FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
       # - TELEGRAM_BOT_TOKEN=
       # - TELEGRAM_CHAT_ID=
